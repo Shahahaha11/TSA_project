@@ -31,6 +31,8 @@ prices = prices.asfreq('B').ffill()
 
 print(prices.head())
 
+file_path = "/Users/shah/TSA_project/TSA_project/prices.pkl"
+prices.to_pickle(file_path)
 
 train = prices.iloc[:-261]  
 test  = prices.iloc[-261:] 
