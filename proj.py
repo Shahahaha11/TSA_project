@@ -1,12 +1,12 @@
 import datetime as dt
 import pandas as pd
-from pandas_datareader import data as web
+import yfinance as yf
 
-# Define date range
-end   = dt.date.today()
-start = end - dt.timedelta(days=5*365)
+# Fixed date range
+start = dt.date(2020, 5, 1)
+end   = dt.date(2025, 5, 1)
 
-# Map instrument names to tickers (examples)
+# Map instrument names to tickers
 tickers = {
     'Equity_Index': '^GSPC',    # S&P 500
     'Company_Stock': 'AAPL',    # Apple Inc.
@@ -15,13 +15,27 @@ tickers = {
     'Crypto': 'ETH-USD'         # Ethereum
 }
 
-# Fetch and combine into one DataFrame of Adj Close
-prices = pd.DataFrame({
-    name: web.DataReader(sym, 'yahoo', start, end)['Adj Close']
-    for name, sym in tickers.items()
-})
+# Download adjusted close for all symbols in one call
+df = yf.download(
+    list(tickers.values()),
+    start=start,
+    end=end,
+    progress=False
+)['Close']
 
-# Ensure daily frequency (forward-fill any missing)
+# Rename columns from ticker symbols to your friendly names
+prices = df.rename(columns={sym: name for name, sym in tickers.items()})
+
+# Ensure business‐day frequency and forward‐fill
 prices = prices.asfreq('B').ffill()
 
-print(prices.tail())
+print(prices.head())
+
+
+train = prices.iloc[:-261]  
+test  = prices.iloc[-261:] 
+
+train.tail(3)
+
+
+
