@@ -1,3 +1,6 @@
+# The following environment is selected
+# ~/TSA_project/.venv/bin/python
+# 
 import pandas as pd
 import datetime as dt
 import yfinance as yf
@@ -68,8 +71,8 @@ file_path = "/Users/shah/TSA_project/TSA_project/test.pkl"
 test.to_pickle(file_path)
 
 """
-
-file_path = "/Users/shah/TSA_project/TSA_project/prices.pkl"
+#%%
+file_path = "/Users/shah/TSA_project/prices.pkl"
 prices=pd.read_pickle(file_path)
 
 cols = ['Company_Stock', 'Crypto', 'FX_Pair', 'Commodity', 'Equity_Index']

@@ -6,6 +6,7 @@
 	],
 	"settings": {
 		"jupyter.interactiveWindow.textEditor.executeSelection": true,
-		"python.REPL.enableREPLSmartSend": false
+		"python.REPL.enableREPLSmartSend": true,
+		"interactiveWindow.executeWithShiftEnter": true
 	}
 }
