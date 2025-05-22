@@ -1,3 +1,4 @@
+#%%
 # The following environment is selected
 # ~/TSA_project/.venv/bin/python
 # 
@@ -79,7 +80,7 @@ cols = ['Company_Stock', 'Crypto', 'FX_Pair', 'Commodity', 'Equity_Index']
 returns = prices[cols].pct_change().add_suffix('_ret')
 prices = pd.concat([prices, returns], axis=1).dropna()
 print(prices.filter(like='_ret').head())
-
+#%%
 
 def portfolio_return(df):
     assets = ['Company_Stock_ret', 'Crypto_ret', 'FX_Pair_ret', 'Commodity_ret', 'Equity_Index_ret']
@@ -88,19 +89,22 @@ def portfolio_return(df):
     return df
 
 print(prices.filter(like='_ret').head())
-
-prices = portfolio_return(prices)
-prices.columns
-
+#%%
+df = portfolio_return(prices)
+df.columns
+#%%
 train = prices.iloc[:-261]  
 test  = prices.iloc[-261:] 
-
+#%%
+print(train.tail(2))
+#%% 
+print(test.tail(2))
+#%%
 """
 file_path = "/Users/shah/TSA_project/TSA_project/test.pkl"
 test= pd.read_pickle(file_path)
 """
 #%%
-
 def plot_sharpe_frontier(df, rf=0.0, n_portfolios=5000):
     """Plots the efficient frontier & tangent (CML) using actual means & covariances."""
     mu  = df.mean()        # actual mean returns
@@ -224,11 +228,11 @@ adf_test(train['FX_Pair_ret'])
 #%%
 adf_test(train['Commodity_ret'])
 #%%
+adf_test(train['Equity_Index_ret'])
+#%%
 
 train.head()
 
-#%%
-adf_test(train['Equity_Index_ret'])
 #%%
 
 import numpy as np
@@ -289,19 +293,24 @@ def filtered_variance(res, train_pct, test_pct):
     alpha = res.params['alpha[1]']
     beta  = res.params['beta[1]']
     mean  = res.params.get('mu', 0)
-
+#mu (the mean return) is estimated during fitting and saved in res.params['mu']
+# collecting sigma sq from our time at train
     train_sigma2 = (res.conditional_volatility**2).values
+# combining all returns , train+test in a single array
     all_r = np.concatenate([train_pct.values, test_pct.values])
     T     = len(all_r)
     sig2    = np.empty(T)
+# filling in the known sig_sq from train time, after that sig2 will be empty.
     sig2[:len(train_sigma2)] = train_sigma2
-
+# eps is residuals from yesterday
+# we are creating recursion to compute the test part 
     for t in range(len(train_sigma2), T):
         eps2    = (all_r[t-1] - mean)**2
         sig2[t]   = omega + alpha * eps2 + beta * sig2[t-1]
 
     return pd.Series(sig2[len(train_sigma2):], index=test_pct.index, name='actual_variance')
 
+#%%
 def main(train, test):
     train_pct = train['portfolio'] * 100
     test_pct  = test['portfolio']  * 100
@@ -318,10 +327,11 @@ def main(train, test):
 if __name__ == '__main__':
     main(train, test)
 
-#%%
-import matplotlib.pyplot as plt
-compare[['predicted', 'actual']].plot()
-plt.show()
+#%% [markdown]
+# - We fit a GARCH using train, take model results (`omega`, `alpha`, and `beta`)  
+# - We use these same parameters and simply place them in the equations on the test index  
+# - We apply the estimated GARCH parameters (learnt from train) directly on test to compute variance  
+
 
 #%%
 mdl_test(train,test.index).plot()

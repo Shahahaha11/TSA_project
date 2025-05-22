@@ -1,4 +1,5 @@
 {
     "jupyter.interactiveWindow.textEditor.executeSelection": true,
-    "python.REPL.enableREPLSmartSend": true
+    "python.REPL.enableREPLSmartSend": true,
+    "editor.fontSize": 9
 }
