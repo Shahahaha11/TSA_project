@@ -1,5 +1,5 @@
-import datetime as dt
 import pandas as pd
+import datetime as dt
 import yfinance as yf
 # Import necessary libraries
 import pandas as pd # for data processing
@@ -21,9 +21,8 @@ from statsmodels.api import OLS
 from statsmodels.graphics.tsaplots import plot_acf, plot_pacf # ACF, PACF plots
 from statsmodels.tsa.arima.model import ARIMA
 from statsmodels.stats.diagnostic import acorr_ljungbox
-
 from IPython.display import Markdown
-
+#%%
 """    
 # Fixed date range
 start = dt.date(2020, 5, 1)
@@ -97,8 +96,7 @@ test  = prices.iloc[-261:]
 file_path = "/Users/shah/TSA_project/TSA_project/test.pkl"
 test= pd.read_pickle(file_path)
 """
-import numpy as np
-import matplotlib.pyplot as plt
+#%%
 
 def plot_sharpe_frontier(df, rf=0.0, n_portfolios=5000):
     """Plots the efficient frontier & tangent (CML) using actual means & covariances."""
@@ -115,6 +113,7 @@ def plot_sharpe_frontier(df, rf=0.0, n_portfolios=5000):
     t    = np.argmax(sharpe)
     sr   = sharpe[t]
 
+#%%
     # plot everything
     plt.scatter(vols, rets, s=10, alpha=0.6)
     x = np.linspace(0, vols.max(), 100)
@@ -129,26 +128,22 @@ def plot_sharpe_frontier(df, rf=0.0, n_portfolios=5000):
 train_drop_nan = train.dropna()
 train_drop_nan[['Company_Stock_ret', 'Crypto_ret', 'FX_Pair_ret', 'Commodity_ret', 'Equity_Index_ret', 'portfolio']].plot(figsize=(10, 6), title="PLOT")
 plt.show()
-
+#%%
 def adf_test0(series, max_lag=3):
     result = adfuller(series.dropna(), maxlag=max_lag, autolag=None)
     print(f"ADF Statistic: {result[0]}")
     print(f"p-value: {result[1]}")
     print(f"Critical Values: {result[4]}")
 
+#%%
 
 train.tail(3)
 train.columns
 
-##############################
-
-
 ################### initial eda ################
 train[['Company_Stock', 'Crypto', 'FX_Pair', 'Commodity', 'Equity_Index', 'portfolio']].plot(figsize=(10, 6), title="PLOT")
 plt.show()
-
-
-
+#%%
 ############# ADF TEST ##############
 train.columns
 
@@ -159,8 +154,7 @@ adf_test0(train['Commodity_ret'])
 adf_test0(train['Equity_Index_ret'])
 
 train.head()
-
-
+#%%
 ######################### ADF TEST WITH  AUGMENTATIONS ###########################################
 def adf_test(series, max_aug=10, version='c'):
     
@@ -217,19 +211,28 @@ def adf_test(series, max_aug=10, version='c'):
                           'BG test (15 lags) (statistic)', 'BG test (15 lags) (p-value)']
     
     return results_df
-
- 
+#%% 
 adf_test(train['Company_Stock_ret'])
+#%%
 adf_test(train['Crypto_ret'])
-adf_test(train['FX_Pair_ret'])
-adf_test(train['Commodity_ret'])
-adf_test(train['Equity_Index_ret'])
+#%%
 
+adf_test(train['FX_Pair_ret'])
+#%%
+adf_test(train['Commodity_ret'])
+#%%
+
+train.head()
+
+#%%
+adf_test(train['Equity_Index_ret'])
+#%%
 
 import numpy as np
 from arch import arch_model
 from scipy.stats import norm
 
+#%%
 def fit_model_rescaled(train, test_index, model='GARCH', alpha=0.05):
     # 1) rescale to pct
     y_pct = train['portfolio'] * 100
@@ -239,24 +242,107 @@ def fit_model_rescaled(train, test_index, model='GARCH', alpha=0.05):
     res = am.fit(disp='off')
 
     # 3) in‐sample annualized vol (in pct units), then back to decimals
-    vol_pct_ann = res.conditional_volatility * np.sqrt(252)
+    vol_pct_ann = res.conditional_volatility
     vol_ann = vol_pct_ann / 100
 
     # 4) 1‐step var forecasts (in pct units)
     h1_var_pct = res.forecast(start=test_index[0], horizon=1).variance['h.1']
     sigma_pct = np.sqrt(h1_var_pct)
-
+    
     # 5) VaR in decimal returns
     z = norm.ppf(alpha)
     VaR = -(z * sigma_pct) / 100
+    mdl= train.copy()
+    mdl['portfolio_100']= mdl['portfolio']*100
+    # full series of annualized realized vol (one-step ahead proxy)
+    mdl['realized_vol'] = np.sqrt(mdl['portfolio'].pow(2).shift(1).rolling(3).sum())
+    
+    return vol_ann, VaR, mdl, test_index
+#%%
+#  2MARKDOWN
+#  
+#%%
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from arch import arch_model
 
-    return vol_ann, VaR
+def fit_garch(train_returns_pct):
+    """Fit GARCH(1,1) and return result object."""
+    model = arch_model(train_returns_pct, vol='GARCH', p=1, q=1, dist='normal')
+    return model.fit(disp='off')
 
+def one_step_forecast(res, test_index):
+    """Produce one-step-ahead sig² forecasts over test_index."""
+    h = len(test_index)
+    fc = res.forecast(horizon=h, reindex=False)
+    # last row contains forecasts for t = T_train+1 … T_train+h
+    var_vals = fc.variance.values[-1, :]
+    return pd.Series(var_vals, index=test_index, name='predicted_variance')
+
+def filtered_variance(res, train_pct, test_pct):
+    """Re-run GARCH recursion to get sig² filtered over train+test."""
+    omega = res.params['omega']
+    alpha = res.params['alpha[1]']
+    beta  = res.params['beta[1]']
+    mean  = res.params.get('mu', 0)
+
+    train_sigma2 = (res.conditional_volatility**2).values
+    all_r = np.concatenate([train_pct.values, test_pct.values])
+    T     = len(all_r)
+    sig2    = np.empty(T)
+    sig2[:len(train_sigma2)] = train_sigma2
+
+    for t in range(len(train_sigma2), T):
+        eps2    = (all_r[t-1] - mean)**2
+        sig2[t]   = omega + alpha * eps2 + beta * sig2[t-1]
+
+    return pd.Series(sig2[len(train_sigma2):], index=test_pct.index, name='actual_variance')
+
+def main(train, test):
+    train_pct = train['portfolio'] * 100
+    test_pct  = test['portfolio']  * 100
+
+    res        = fit_garch(train_pct)
+    pred_var   = one_step_forecast(res, test.index)
+    actual_var = filtered_variance(res, train_pct, test_pct)
+
+    compare = pd.DataFrame({'predicted_variance': pred_var,
+                            'actual_variance':    actual_var})
+    compare.plot(title='GARCH(1,1) sig²: Forecast vs. Filtered')
+    plt.show()
+
+if __name__ == '__main__':
+    main(train, test)
+
+#%%
+import matplotlib.pyplot as plt
+compare[['predicted', 'actual']].plot()
+plt.show()
+
+#%%
+mdl_test(train,test.index).plot()
+
+
+mdl_test(train, test.index).dropna()[['pred','actual']].plot()
+
+
+#%%
 # Usage:
-g_vol, g_VaR = fit_model_rescaled(train, test.index, model='GARCH')
-e_vol, e_VaR = fit_model_rescaled(train, test.index, model='EGARCH')
+g_vol, g_VaR, mdl, = fit_model_rescaled(train, test.index, model='GARCH')
+e_vol, e_VaR, mdl = fit_model_rescaled(train, test.index, model='EGARCH')
+#%%
 
-pd.DataFrame({'GARCH': g_vol, 'EGARCH': e_vol}).plot()
+pd.DataFrame({'GARCH': g_vol, 'actual': mdl['realized_vol'] }).plot()
+pd.DataFrame({'EGARCH': e_vol, 'actual': mdl['realized_vol']}).plot()
+#%%
+pd.DataFrame({'EGARCH': e_vol,'GARCH': g_VaR}).plot()
+#%%
+g_var = pd.Series(g_VaR).rename('g_var')
 
+# %%
 
-
+model_arch1 = arch_model(mdl[''].dropna(), vol='ARCH', p=1)
+results_arch1 = model_arch1.fit(disp='off')
+print(results_arch1.summary())
+# %%
