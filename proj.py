@@ -3,24 +3,28 @@
 # ~/TSA_project/.venv/bin/python
 # 
 import pandas as pd
+import numpy as np
 import datetime as dt
 import yfinance as yf
-import pandas as pd # for data processing
-import numpy as np # here mostly for series generation
-import matplotlib.pyplot as plt # for vizualization
-import matplotlib.dates as mdates # for data formatting when visualizing
-import matplotlib.ticker as ticker # for more advanced axis formatting
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import matplotlib.ticker as ticker
 import seaborn as sns
-import statsmodels.api as sm # for linear regression model, OLS estimation
-import statsmodels.stats.diagnostic as smd # for Breusch-Godfrey test
-from statsmodels.tsa.stattools import adfuller
-from statsmodels.tsa.stattools import grangercausalitytests
+import statsmodels.api as sm
+import statsmodels.stats.diagnostic as smd
+from statsmodels.tsa.stattools import adfuller, grangercausalitytests, acf, pacf
 from statsmodels.tsa.api import VAR
 from statsmodels.api import OLS
-from statsmodels.graphics.tsaplots import plot_acf, plot_pacf # ACF, PACF plots
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
 from statsmodels.tsa.arima.model import ARIMA
 from statsmodels.stats.diagnostic import acorr_ljungbox
 from IPython.display import Markdown
+from arch import arch_model
+from scipy import stats
+from curl_cffi import requests
+from scipy.stats import norm
+
+
 #%%
 """    
 # Fixed date range
@@ -69,9 +73,10 @@ test.to_pickle(file_path)
 #%%
 file_path = "/Users/shah/TSA_project/prices.pkl"
 prices=pd.read_pickle(file_path)
-
+#%%
 cols = ['Company_Stock', 'Crypto', 'FX_Pair', 'Commodity', 'Equity_Index']
 returns = prices[cols].pct_change().add_suffix('_ret')
+returns = np.log(prices[cols] / prices[cols].shift(1)).add_suffix('_ret')
 prices = pd.concat([prices, returns], axis=1).dropna()
 print(prices.filter(like='_ret').head())
 #%%
@@ -92,14 +97,93 @@ test  = prices.iloc[-261:]
 #%%
 print(train.columns)
 #%% 
-print(test.tail(2))
+# Autocorrelation function for log returns
+tun_tun_tun_sahur = pacf
+acf_values = tun_tun_tun_sahur(train['portfolio'].dropna(), nlags=36)
+plt.figure(figsize=(12, 6))
+plt.stem(range(len(acf_values)), acf_values)
+plt.axhline(y=0, linestyle='-', color='black')
+plt.axhline(y=-1.96/np.sqrt(len(train['portfolio'])), linestyle='--', color='gray')
+plt.axhline(y=1.96/np.sqrt(len(train['portfolio'])), linestyle='--', color='gray')
+plt.title(f'{tun_tun_tun_sahur.__name__} of Log Returns of ')
+plt.show()
+#%% [markdown]
+# Looking at the PACF we can say with a 95% confidence that the log price difference 9 days, 24 days and 26 days ago
+# are (non linear independent from other lags) correlated with today's price change. 
+ 
 #%%
-import numpy as np
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
+print("Basic statistics:")
+print(train['portfolio'].describe())
+print("\nSkewness:", stats.skew(train['portfolio'].dropna()))
+print("Kurtosis:", stats.kurtosis(train['portfolio'].dropna()))
+#%% [markdown]
+#The returns show a slight left skew, meaning small losses occur a bit more frequently than gains. Additionally, the kurtosis is higher than 3, indicating fat tails—so extreme returns, both positive and negative, happen more often than would be expected in a normal distribution. This suggests the data is not perfectly symmetric and has a higher chance of large shocks.
+#%%
+# Histogram of log returns
+plt.figure(figsize=(12, 6))
+sns.histplot(train['portfolio'].dropna(), stat="density", bins = 60)
+# add normal distribution curve
+mu, std = train['portfolio'].mean(), train['portfolio'].std()
+xmin, xmax = plt.xlim()
+x = np.linspace(xmin, xmax, 100)
+p = stats.norm.pdf(x, mu, std)
+plt.plot(x, p, 'k', linewidth=2)
+plt.axvline(x=0, linestyle='--', color='gray')
+plt.axvline(x=train['portfolio'].mean(), linestyle='--', color='red')
+plt.axvline(x=train['portfolio'].quantile(0.025), linestyle='--', color='orange')
+plt.axvline(x=train['portfolio'].quantile(0.975), linestyle='--', color='orange')
+plt.title('Distribution of Log Returns of portfolio')
+plt.show()
+#%%
+# Jarque-Bera test
+jb_test = stats.jarque_bera(train['portfolio'].dropna())
+print(f"Jarque-Bera test statistic: {jb_test[0]:.2f}")
+print(f"p-value: {jb_test[1]:.2e}")
 
+#%%
+#QQ- plot
+
+## Q-Q plot of log returns
+plt.figure(figsize=(12, 6))
+stats.probplot(train['portfolio'].dropna(), dist="norm", plot=plt)
+plt.title('Q-Q Plot of Log Returns of Portfolio')
+plt.grid(True)
+plt.show()
+
+
+#%% [markdown]
+# We have high kurtosis, fat tails. pretty inconsistent for a normal distribution.
+# We also strongly reject the null hypothesis of JB, hence the sample does not come from a normal distribution.
+#  **QQ -plot**
+# The left tail is much thicker, we can also observe skewness here (left is more extreme).
+# The left tail shows more extreme values, which arguably signals volatility clustering.
+# The Probability distribution is much higher at smaller returns. 
+# Which might show the snow ball effect of a bear. 
+# But we cant prove that with just QQ plot, so we check LM test.
+
+#%%
+# ARCH test (Engle's LM test)
+# H0: No ARCH effects
+# H1: ARCH effects are present
+from statsmodels.stats.diagnostic import het_arch
+# Drop NA values from returns for the test
+returns_for_arch_test = train['portfolio'].dropna()
+# H0: NO ARCH EFFECT
+# low p -> reject H0. strong arch effect
+arch_test_results = het_arch(returns_for_arch_test, nlags=5)
+
+print(f"LM Statistic: {arch_test_results[0]:.3f}")
+print(f"p-value: {arch_test_results[1]:.3f}")
+print(f"F-statistic: {arch_test_results[2]:.3f}")
+print(f"F p-value: {arch_test_results[3]:.3f}")
+
+#%%
+
+# [markdown]
+# Strong ARCH effect on the equally weighted portfolio
+# For recreational research we can compare this with a min-variance weighted portfolio
+# and test if this arch effect is overcome by an efficient frontier. 
+#%%
 def plot_sharpe_frontier(df, rf=0.0, n_portfolios=5_000, use_full=False):
     """
     Draw efficient frontier and return exact GMV & tangency weights.
@@ -147,7 +231,6 @@ gmv_weights, tan_weights = plot_sharpe_frontier(train)
 print(gmv_weights)   # minimum-variance weights
 print(tan_weights)   # max-Sharpe (tangency) weights
 
-#%%
 
 #%%
 def adf_test0(series, max_lag=3):
@@ -244,57 +327,35 @@ adf_test(train['Commodity_ret'])
 #%%
 adf_test(train['Equity_Index_ret'])
 #%%
-
+adf_test(train['portfolio'])
+#%%
 train.head()
 
 #%%
 
-import numpy as np
-from arch import arch_model
-from scipy.stats import norm
-
-#%%
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-from arch import arch_model
-
-#%%
-from scipy.stats import norm  
 def fit_garch(train_returns_pct):
     model = arch_model(train_returns_pct, vol='GARCH', p=1, q=1, dist='normal')
     res   = model.fit(disp='off')
-
+    alpha = res.params["alpha[1]"]
+    beta  = res.params["beta[1]"]
     # --- annualized conditional σ (pct units) ---
     ann_sigma_pct = res.conditional_volatility * np.sqrt(252)
     res.ann_cond_std = ann_sigma_pct / 100          # store as decimals for convenience
-    return res
+    return res, alpha, beta
 #%%
 
 # --- 1. fit EGARCH once to get in-sample annualized σ̂ ----------------------
 def fit_egarch(train_returns_pct):
-    """
-    Fit EGARCH(1,1,1) and store annualized conditional σ (decimals).
-    Mirrors fit_garch.
-    """
+
     model = arch_model(train_returns_pct, vol='EGARCH',
                        p=1, o=1, q=1, dist='normal')
     res   = model.fit(disp='off')
-
+    beta  = res.params["beta[1]"]
     ann_sigma_pct = res.conditional_volatility * np.sqrt(252)
     res.ann_cond_std = ann_sigma_pct / 100      # store as decimals
-    return res
-
+    return res, beta
 #%%
-# --- 2. rolling VaR + σ² for EGARCH (thin wrapper) -------------------------
-def rolling_egarch_var(full_ret, alpha=0.05, window=None):
-    """
-    Wrapper that just calls the generic rolling routine with vol='EGARCH'.
-    Produces predicted_variance and VaR Series for the test period.
-    """
-    return rolling_garch_var(full_ret, alpha=alpha, window=window, vol='EGARCH')
-
-
+# For EGARCH the persistence metric is just β
 #%%
 def rolling_garch_var(train_test, alpha=0.05, window=None, vol='GARCH'):
     """
@@ -332,11 +393,17 @@ def rolling_garch_var(train_test, alpha=0.05, window=None, vol='GARCH'):
 def main(train, test, alpha=0.05, window=None):
     train = train.copy()
     # --- in-sample fits ----------------------------------------------------
-    res_g = fit_garch(train['portfolio'] * 100)
-    res_e = fit_egarch(train['portfolio'] * 100)
+    res_g ,alpha_gar, beta_gar= fit_garch(train['portfolio'] * 100)
+    res_e , beta_egar= fit_egarch(train['portfolio'] * 100)
     train['ann_sigma_garch']  = res_g.ann_cond_std
     train['ann_sigma_egarch'] = res_e.ann_cond_std
 
+    persistence_gar = alpha_gar + beta_gar
+    print('alpha+beta for GARCH:', persistence_gar)
+
+    persistence_egar = beta_egar
+    print('alpha+beta for EGARCH:', persistence_egar)
+    
     # --- rolling out-of-sample -------------------------------------------
     full_ret  = pd.concat([train['portfolio'], test['portfolio']])
     global train_end; train_end = train.index[-1]
@@ -352,6 +419,12 @@ def main(train, test, alpha=0.05, window=None):
     test['portfolio'].plot(ax=ax, alpha=0.4, label='Returns')
     ax.set_title('Rolling 1-day VaR: GARCH vs. EGARCH'); ax.legend()
     plt.show()
+    
+#%%[markdown]
+#<br>The precise crossing point marks the instant when the realised shock equals the forecast quantile; everything outside is an exceedance, 
+#<br>The returns above the GARCH rolling part is where the model has been breached
+# i.e. tail risk the model failed to contain
+#<br> from alpha+beta we can say that the series has very high volatility persistence; shocks decay extremely slowly. Variance reverts, but at a very sluggish rate
 
 #%%
 if __name__ == "__main__":
@@ -361,7 +434,6 @@ if __name__ == "__main__":
     main(train, test, alpha=0.05, window=None)   # window=None → expanding
     # e.g. main(train, test, alpha=0.05, window=252)  # 1-year rolling window
 
-#%%
 #%% [markdown]
 # **Workflow:**
 # <br>We estimate GARCH(1,1) and EGARCH(1,1,1) on the training set and record their annualised conditional σ.  
