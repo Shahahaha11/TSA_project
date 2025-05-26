@@ -23,6 +23,8 @@ from arch import arch_model
 from scipy import stats
 from curl_cffi import requests
 from scipy.stats import norm
+from scipy.optimize import minimize
+
 
 
 #%%
@@ -75,7 +77,7 @@ file_path = "/Users/shah/TSA_project/prices.pkl"
 prices=pd.read_pickle(file_path)
 #%%
 cols = ['Company_Stock', 'Crypto', 'FX_Pair', 'Commodity', 'Equity_Index']
-returns = prices[cols].pct_change().add_suffix('_ret')
+"""returns = prices[cols].pct_change().add_suffix('_ret')"""
 returns = np.log(prices[cols] / prices[cols].shift(1)).add_suffix('_ret')
 prices = pd.concat([prices, returns], axis=1).dropna()
 print(prices.filter(like='_ret').head())
@@ -95,12 +97,22 @@ df.columns
 train = prices.iloc[:-261]  
 test  = prices.iloc[-261:] 
 #%%
-train['portfolio'].plot
-plt.show
+test.head()
 #%% 
-# Autocorrelation function for log returns
+# Autocorrelation function of log returns, maybe not!
 tun_tun_tun_sahur = pacf
 acf_values = tun_tun_tun_sahur(train['portfolio'].dropna(), nlags=36)
+plt.figure(figsize=(12, 6))
+plt.stem(range(len(acf_values)), acf_values)
+plt.axhline(y=0, linestyle='-', color='black')
+plt.axhline(y=-1.96/np.sqrt(len(train['portfolio'])), linestyle='--', color='gray')
+plt.axhline(y=1.96/np.sqrt(len(train['portfolio'])), linestyle='--', color='gray')
+plt.title(f'{tun_tun_tun_sahur.__name__} of Log Returns of ')
+plt.show()
+#%% 
+# Autocorrelation function for squared log returns.
+tun_tun_tun_sahur = pacf
+acf_values = tun_tun_tun_sahur((train['portfolio']**2).dropna(), nlags=36)
 plt.figure(figsize=(12, 6))
 plt.stem(range(len(acf_values)), acf_values)
 plt.axhline(y=0, linestyle='-', color='black')
@@ -111,7 +123,10 @@ plt.show()
 #%% [markdown]
 # Looking at the PACF we can say with a 95% confidence that the log price difference 9 days, 24 days and 26 days ago
 # are (non linear independent from other lags) correlated with today's price change. 
- 
+# Since our ACF and PACF look  almost identical 
+# This suggests both ARCH and GARCH effects are present and intertwined.
+# In other words shocks (eps^2) and volatility persistence (sig^2) both influence current volatility. 
+# hence for the q part we keep lags equal to 1 only, to reduce computational power and for p we start with testing for lags 1,2,3,5,25
 #%%
 print("Basic statistics:")
 print(train['portfolio'].describe())
@@ -241,10 +256,6 @@ def adf_test0(series, max_lag=3):
     print(f"Critical Values: {result[4]}")
 
 #%%
-
-train.tail(3)
-train.columns
-
 ################### initial eda ################
 train[['Company_Stock', 'Crypto', 'FX_Pair', 'Commodity', 'Equity_Index', 'portfolio']].plot(figsize=(10, 6), title="PLOT")
 plt.show()
@@ -333,7 +344,6 @@ adf_test(train['portfolio'])
 train.head()
 
 #%%
-
 def fit_garch(train_returns_pct):
     model = arch_model(train_returns_pct, vol='GARCH', p=1, q=1, dist='normal')
     res   = model.fit(disp='off')
@@ -343,21 +353,113 @@ def fit_garch(train_returns_pct):
     ann_sigma_pct = res.conditional_volatility * np.sqrt(252)
     res.ann_cond_std = ann_sigma_pct / 100          # store as decimals for convenience
     return res, alpha, beta
+
 #%%
 
+def fit_garch_custom_lags(train_returns_pct, arch_lags=[1,2,4], garch_lags=[1,3,6]):
+    r = train_returns_pct.values if hasattr(train_returns_pct, 'values') else train_returns_pct
+    T = len(r)
+    max_lag = max(arch_lags + garch_lags)
+
+    def neg_log_lik(params):
+        omega = params[0]
+        alpha = params[1 : 1 + len(arch_lags)]
+        beta = params[1 + len(arch_lags):]
+        sig2 = np.ones(T) * np.var(r)
+        for t in range(max_lag, T):
+            sig2[t] = omega \
+                    + sum(alpha[i] * r[t - lag]**2 for i, lag in enumerate(arch_lags)) \
+                    + sum(beta[j] * sig2[t - lag] for j, lag in enumerate(garch_lags))
+        ll = -0.5 * (np.log(2 * np.pi) + np.log(sig2) + r**2 / sig2)
+        return -np.sum(ll)
+
+    k = 1 + len(arch_lags) + len(garch_lags)
+    init = np.ones(k) * 0.1
+    bounds = [(1e-6, 1.0)] * k
+    result = minimize(neg_log_lik, init, bounds=bounds)
+
+    omega = result.x[0]
+    alpha_vals = result.x[1 : 1 + len(arch_lags)]
+    beta_vals = result.x[1 + len(arch_lags):]
+
+    sig2 = np.ones(T) * np.var(r)
+    for t in range(max_lag, T):
+        sig2[t] = omega \
+                + sum(alpha_vals[i] * r[t - lag]**2 for i, lag in enumerate(arch_lags)) \
+                + sum(beta_vals[j] * sig2[t - lag] for j, lag in enumerate(garch_lags))
+
+    ann_sigma_pct = np.sqrt(sig2) * np.sqrt(252)
+
+    class Res:
+        conditional_volatility = np.sqrt(sig2)
+        ann_cond_std = ann_sigma_pct / 100
+
+    return Res, np.sum(alpha_vals), np.sum(beta_vals)
+
+#%%
+def fit_egarch_custom_lags(train_returns_pct, arch_lags=[1,2,3,5,25], garch_lags=[1,2]):
+    r = train_returns_pct.values if hasattr(train_returns_pct, 'values') else train_returns_pct
+    T = len(r)
+    max_lag = max(arch_lags + garch_lags)
+
+    def neg_log_lik(params):
+        omega = params[0]
+        alpha = params[1 : 1 + len(arch_lags)]
+        beta = params[1 + len(arch_lags):]
+        sig2 = np.ones(T) * np.var(r)
+        for t in range(max_lag, T):
+            sig2[t] = omega \
+                    + sum(alpha[i] * r[t - lag]**2 for i, lag in enumerate(arch_lags)) \
+                    + sum(beta[j] * sig2[t - lag] for j, lag in enumerate(garch_lags))
+        ll = -0.5 * (np.log(2 * np.pi) + np.log(sig2) + r**2 / sig2)
+        return -np.sum(ll)
+
+    k = 1 + len(arch_lags) + len(garch_lags)
+    init = np.ones(k) * 0.1
+    bounds = [(1e-6, 1.0)] * k
+    result = minimize(neg_log_lik, init, bounds=bounds)
+
+    omega = result.x[0]
+    alpha_vals = result.x[1 : 1 + len(arch_lags)]
+    beta_vals = result.x[1 + len(arch_lags):]
+
+    sig2 = np.ones(T) * np.var(r)
+    for t in range(max_lag, T):
+        log_sig2 = np.ones(T) * np.log(np.var(r))
+        for t in range(max_lag, T):
+            arch_part  = sum(alpha_vals[i] * (np.abs(r[t - lag]) - np.sqrt(2/np.pi)) for i, lag in enumerate(arch_lags))
+            garch_part = sum(beta_vals[j] * log_sig2[t - lag] for j, lag in enumerate(garch_lags))
+            log_sig2[t] = omega + arch_part + garch_part
+        sig2 = np.exp(log_sig2)
+
+    ann_sigma_pct = np.sqrt(sig2) * np.sqrt(252)
+
+    class Res:
+        conditional_volatility = np.sqrt(sig2)
+        ann_cond_std = ann_sigma_pct / 100
+
+    return Res, np.sum(alpha_vals), np.sum(beta_vals)
+
+#%%
 # --- 1. fit EGARCH once to get in-sample annualized σ̂ ----------------------
 def fit_egarch(train_returns_pct):
 
     model = arch_model(train_returns_pct, vol='EGARCH',
                        p=1, o=1, q=1, dist='normal')
     res   = model.fit(disp='off')
+    alpha = res.params["alpha[1]"]
     beta  = res.params["beta[1]"]
     ann_sigma_pct = res.conditional_volatility * np.sqrt(252)
     res.ann_cond_std = ann_sigma_pct / 100      # store as decimals
-    return res, beta
-#%%
+    return res, alpha, beta
+
+
+
+#%%[markdown]
 # For EGARCH the persistence metric is just β
 #%%
+from scipy.stats import norm
+
 def rolling_garch_var(train_test, alpha=0.05, window=None, vol='GARCH'):
     """
     Rolling one-day VaR and σ² with either GARCH or EGARCH.
@@ -374,14 +476,15 @@ def rolling_garch_var(train_test, alpha=0.05, window=None, vol='GARCH'):
             train_slice = train_test.loc[:t - pd.Timedelta(days=1)]
 
         # fit chosen model
-        res = arch_model(train_slice * 100,
-                         vol=vol, p=1, o=(1 if vol == 'EGARCH' else 0),
-                         q=1, dist='normal').fit(disp='off')
+        if vol == 'GARCH':
+            res, alpha, beta = fit_garch_custom_lags(train_slice * 100, arch_lags=[1,2,4], garch_lags=[1,3,6])
+        else:
+            res, alpha, beta = fit_egarch_custom_lags(train_slice * 100, arch_lags=[1,2,4], garch_lags=[1,3,6])
 
-        # 1-step forecast
-        sig2_pct = res.forecast(horizon=1, reindex=False).variance.values[-1, 0]
-        sigma    = np.sqrt(sig2_pct) / 100
-        VaR_t    = -norm.ppf(alpha) * sigma
+        # last conditional volatility as 1-day ahead forecast
+        sigma = res.conditional_volatility[-1] / 100
+        VaR_t = -norm.ppf(alpha) * sigma
+        sig2_pct = (sigma * 100)**2  # convert back to percent squared
 
         sig2_list.append(sig2_pct / 1e4)   # store as decimal variance
         var_list.append(VaR_t)
@@ -389,13 +492,15 @@ def rolling_garch_var(train_test, alpha=0.05, window=None, vol='GARCH'):
     return (pd.Series(sig2_list, index=test_index, name=f'{vol}_σ2'),
             pd.Series(var_list,  index=test_index, name=f'{vol}_VaR'))
 
-
 #%%
 def main(train, test, alpha=0.05, window=None):
     train = train.copy()
     # --- in-sample fits ----------------------------------------------------
-    res_g ,alpha_gar, beta_gar= fit_garch(train['portfolio'] * 100)
-    res_e , beta_egar= fit_egarch(train['portfolio'] * 100)
+    """res_g ,alpha_gar, beta_gar= fit_garch(train['portfolio'] * 100)"""
+    """res_e , alpha_egar, beta_egar= fit_egarch(train['portfolio'] * 100)"""
+    res_g, alpha_gar, beta_gar = fit_garch_custom_lags(train['portfolio'] * 100,  arch_lags=[1,2,3,5,25], garch_lags=[1,2])
+    res_e, alpha_egar, beta_egar = fit_egarch_custom_lags(train['portfolio'] * 100,  arch_lags=[1,2,3,5,25], garch_lags=[1,2])
+    
     train['ann_sigma_garch']  = res_g.ann_cond_std
     train['ann_sigma_egarch'] = res_e.ann_cond_std
 
