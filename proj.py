@@ -95,7 +95,8 @@ df.columns
 train = prices.iloc[:-261]  
 test  = prices.iloc[-261:] 
 #%%
-print(train.columns)
+train['portfolio'].plot
+plt.show
 #%% 
 # Autocorrelation function for log returns
 tun_tun_tun_sahur = pacf
