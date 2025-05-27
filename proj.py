@@ -2,6 +2,7 @@
 # The following environment is selected
 # ~/TSA_project/.venv/bin/python
 
+
 #%% 
 from IPython.display import Markdown, display
 display(Markdown("""
@@ -98,6 +99,7 @@ test.to_pickle(file_path)
 #%%
 file_path = "/Users/shah/TSA_project/prices.pkl"
 prices=pd.read_pickle(file_path)
+
 #%%
 cols = ['Company_Stock', 'Crypto', 'FX_Pair', 'Commodity', 'Equity_Index']
 """returns = prices[cols].pct_change().add_suffix('_ret')"""
@@ -135,6 +137,110 @@ plt.grid(True)
 plt.show()
 
 #%%
+def adf_test0(series, max_lag=3):
+    result = adfuller(series.dropna(), maxlag=max_lag, autolag=None)
+    print(f"ADF Statistic: {result[0]}")
+    print(f"p-value: {result[1]}")
+    print(f"Critical Values: {result[4]}")
+
+#%%
+################### initial eda ################
+train[['Company_Stock', 'Crypto', 'FX_Pair', 'Commodity', 'Equity_Index', 'portfolio']].plot(figsize=(10, 6), title="PLOT")
+plt.show()
+#%%
+############# ADF TEST ##############
+train.columns
+
+adf_test0(train['Company_Stock_ret'])
+adf_test0(train['Crypto_ret'])
+adf_test0(train['FX_Pair_ret'])
+adf_test0(train['Commodity_ret'])
+adf_test0(train['Equity_Index_ret'])
+
+train.head()
+#%%
+######################### ADF TEST WITH  AUGMENTATIONS ###########################################
+def adf_test(series, max_aug=10, version='c'):
+    
+    results = []
+
+    y = series.diff()
+    X = pd.DataFrame({'y_lag': series.shift()})
+
+    if version == 'c' or version == 't': # constant to be added optionally 
+        X = sm.add_constant(X)
+    if version == 't': # (deterministic) trend component to be added optionally
+        X['trend'] = range(len(X))
+
+    for i in range(0, max_aug): # iterating through different numbers of augmentations
+        
+        for aug in range(1, i+1): # adding augmentations max_aug is reached
+            X['aug_'+str(aug)] = y.shift(aug)
+
+        model = sm.OLS(series.diff(), X, missing='drop').fit() # fitting a linear regression with OLS
+
+        ts = model.tvalues['y_lag'] # test statistic
+        nobs = model.nobs # number of observations
+
+        if version == 'n': # critical values for basic version of ADF
+            if nobs > 100:
+                cv01 = -2.567; cv05 = -1.941; cv10 = -1.616 # critical values for more than 500 observations
+            else:
+                cv01 = np.nan; cv05 = np.nan; cv10 = np.nan # if number of observations is lower than 500, we should check the critical values manually
+        if version == 'c': # critical values for version with constant
+            if nobs > 100:
+                cv01 = -3.434; cv05 = -2.863; cv10 = -2.568 # critical values for more than 500 observations
+            else:
+                cv01 = np.nan; cv05 = np.nan; cv10 = np.nan # if number of observations is lower than 500, we should check the critical values manually
+        if version == 't': # critical values for version with constant and (deterministic) trend component
+            if nobs > 100:
+                cv01 = -3.963; cv05 = -3.413; cv10 = -3.128 # critical values for more than 500 observations
+            else:
+                cv01 = np.nan; cv05 = np.nan; cv10 = np.nan # if number of observations is lower than 500, we should check the critical values manually
+
+        bg_test01 = smd.acorr_breusch_godfrey(model, nlags=1);  bg_pvalue01 = round(bg_test01[1],4); bg_test01 = round(bg_test01[0],4); 
+        bg_test05 = smd.acorr_breusch_godfrey(model, nlags=5);  bg_pvalue05 = round(bg_test05[1],4); bg_test05 = round(bg_test05[0],4); 
+        bg_test10 = smd.acorr_breusch_godfrey(model, nlags=10); bg_pvalue10 = round(bg_test10[1],4); bg_test10 = round(bg_test10[0],4);
+        bg_test15 = smd.acorr_breusch_godfrey(model, nlags=15); bg_pvalue15 = round(bg_test15[1],4); bg_test15 = round(bg_test15[0],4);
+
+        results.append([i, ts, cv01, cv05, cv10, 
+                        bg_test01, bg_pvalue01, bg_test05, bg_pvalue05, bg_test10, bg_pvalue10, bg_test15, bg_pvalue15])
+
+    results_df = pd.DataFrame(results)
+    results_df.columns = ['number of augmentations', 
+                          'ADF test statistic', 'ADF critival value (1%)', 'ADF critival value (5%)', 'ADF critival value (10%)', 
+                          'BG test (1 lag) (statistic)', 'BG test (1 lag) (p-value)', 
+                          'BG test (5 lags) (statistic)', 'BG test (5 lags) (p-value)', 
+                          'BG test (10 lags) (statistic)', 'BG test (10 lags) (p-value)', 
+                          'BG test (15 lags) (statistic)', 'BG test (15 lags) (p-value)']
+    
+    return results_df
+#%% 
+adf_test(train['Company_Stock'])
+#%%
+adf_test(train['Crypto'])
+#%%
+
+adf_test(train['FX_Pair'])
+#%%
+adf_test(train['Commodity'])
+#%%
+adf_test(train['Equity_Index'])
+#%% 
+adf_test(train['Company_Stock_ret'])
+#%%
+adf_test(train['Crypto_ret'])
+#%%
+
+adf_test(train['FX_Pair_ret'])
+#%%
+adf_test(train['Commodity_ret'])
+#%%
+adf_test(train['Equity_Index_ret'])
+#%%
+adf_test(train['portfolio'])
+#%%
+train.head()
 # Histogram
 plt.figure(figsize=(8, 4))
 sns.histplot(train['portfolio'], bins=50, kde=True)
@@ -311,99 +417,6 @@ print(tan_weights)   # max-Sharpe (tangency) weights
 
 
 #%%
-def adf_test0(series, max_lag=3):
-    result = adfuller(series.dropna(), maxlag=max_lag, autolag=None)
-    print(f"ADF Statistic: {result[0]}")
-    print(f"p-value: {result[1]}")
-    print(f"Critical Values: {result[4]}")
-
-#%%
-################### initial eda ################
-train[['Company_Stock', 'Crypto', 'FX_Pair', 'Commodity', 'Equity_Index', 'portfolio']].plot(figsize=(10, 6), title="PLOT")
-plt.show()
-#%%
-############# ADF TEST ##############
-train.columns
-
-adf_test0(train['Company_Stock_ret'])
-adf_test0(train['Crypto_ret'])
-adf_test0(train['FX_Pair_ret'])
-adf_test0(train['Commodity_ret'])
-adf_test0(train['Equity_Index_ret'])
-
-train.head()
-#%%
-######################### ADF TEST WITH  AUGMENTATIONS ###########################################
-def adf_test(series, max_aug=10, version='c'):
-    
-    results = []
-
-    y = series.diff()
-    X = pd.DataFrame({'y_lag': series.shift()})
-
-    if version == 'c' or version == 't': # constant to be added optionally 
-        X = sm.add_constant(X)
-    if version == 't': # (deterministic) trend component to be added optionally
-        X['trend'] = range(len(X))
-
-    for i in range(0, max_aug): # iterating through different numbers of augmentations
-        
-        for aug in range(1, i+1): # adding augmentations max_aug is reached
-            X['aug_'+str(aug)] = y.shift(aug)
-
-        model = sm.OLS(series.diff(), X, missing='drop').fit() # fitting a linear regression with OLS
-
-        ts = model.tvalues['y_lag'] # test statistic
-        nobs = model.nobs # number of observations
-
-        if version == 'n': # critical values for basic version of ADF
-            if nobs > 100:
-                cv01 = -2.567; cv05 = -1.941; cv10 = -1.616 # critical values for more than 500 observations
-            else:
-                cv01 = np.nan; cv05 = np.nan; cv10 = np.nan # if number of observations is lower than 500, we should check the critical values manually
-        if version == 'c': # critical values for version with constant
-            if nobs > 100:
-                cv01 = -3.434; cv05 = -2.863; cv10 = -2.568 # critical values for more than 500 observations
-            else:
-                cv01 = np.nan; cv05 = np.nan; cv10 = np.nan # if number of observations is lower than 500, we should check the critical values manually
-        if version == 't': # critical values for version with constant and (deterministic) trend component
-            if nobs > 100:
-                cv01 = -3.963; cv05 = -3.413; cv10 = -3.128 # critical values for more than 500 observations
-            else:
-                cv01 = np.nan; cv05 = np.nan; cv10 = np.nan # if number of observations is lower than 500, we should check the critical values manually
-
-        bg_test01 = smd.acorr_breusch_godfrey(model, nlags=1);  bg_pvalue01 = round(bg_test01[1],4); bg_test01 = round(bg_test01[0],4); 
-        bg_test05 = smd.acorr_breusch_godfrey(model, nlags=5);  bg_pvalue05 = round(bg_test05[1],4); bg_test05 = round(bg_test05[0],4); 
-        bg_test10 = smd.acorr_breusch_godfrey(model, nlags=10); bg_pvalue10 = round(bg_test10[1],4); bg_test10 = round(bg_test10[0],4);
-        bg_test15 = smd.acorr_breusch_godfrey(model, nlags=15); bg_pvalue15 = round(bg_test15[1],4); bg_test15 = round(bg_test15[0],4);
-
-        results.append([i, ts, cv01, cv05, cv10, 
-                        bg_test01, bg_pvalue01, bg_test05, bg_pvalue05, bg_test10, bg_pvalue10, bg_test15, bg_pvalue15])
-
-    results_df = pd.DataFrame(results)
-    results_df.columns = ['number of augmentations', 
-                          'ADF test statistic', 'ADF critival value (1%)', 'ADF critival value (5%)', 'ADF critival value (10%)', 
-                          'BG test (1 lag) (statistic)', 'BG test (1 lag) (p-value)', 
-                          'BG test (5 lags) (statistic)', 'BG test (5 lags) (p-value)', 
-                          'BG test (10 lags) (statistic)', 'BG test (10 lags) (p-value)', 
-                          'BG test (15 lags) (statistic)', 'BG test (15 lags) (p-value)']
-    
-    return results_df
-#%% 
-adf_test(train['Company_Stock_ret'])
-#%%
-adf_test(train['Crypto_ret'])
-#%%
-
-adf_test(train['FX_Pair_ret'])
-#%%
-adf_test(train['Commodity_ret'])
-#%%
-adf_test(train['Equity_Index_ret'])
-#%%
-adf_test(train['portfolio'])
-#%%
-train.head()
 
 #%%
 def fit_garch(train_returns_pct, p =1, q=1):
@@ -684,8 +697,8 @@ run_diagnostics(train['portfolio'] * 100, res_g, label='GARCH')
 run_diagnostics(train['portfolio'] * 100, res_e, label='EGARCH')
 #%%
 
-run_diagnostics(train['portfolio'] * 100, res_gc, label='GARCH')
-run_diagnostics(train['portfolio'] * 100, res_ec, label='EGARCH')
+run_diagnostics(train['portfolio'] * 100, res_gc, label='GARCH_c')
+run_diagnostics(train['portfolio'] * 100, res_ec, label='EGARCH_c')
 #%%
 display(Markdown("""
 ### Comparison: Custom GARCH vs. ARCH Package Models
@@ -693,12 +706,32 @@ display(Markdown("""
 - **GARCH (Custom vs. ARCH package):** Both models perform well, but the custom GARCH shows slightly better residual diagnostics (higher p-values, lower standard deviation).  
 - **EGARCH (Custom vs. ARCH package):** The ARCH package EGARCH is more balanced, while the custom EGARCH leaves a noticeable ARCH effect and slightly over-scales residuals (standard deviation > 1).  
 - **Overall Conclusion:** Custom GARCH is robust and effective; however, the ARCH package EGARCH provides a cleaner and more reliable specification.
+- Why is beta for e_garch with custom lags more smaller?
+-  Because we let the model spread its memory across more time-points, the weight on the main lag shrinks
+"""))
+#%%
+display(Markdown("""
+### Model Comparison: GARCH vs EGARCH
+
+- GARCH: no serial correlation or ARCH left; residual SD ≈ 1.00
+- EGARCH: no serial correlation or ARCH left; residual SD ≈ 1.00
+- GARCH_c: no serial correlation or ARCH left; residual SD ≈ 0.99
+- EGARCH_c: no serial correlation but significant ARCH remains; residual SD ≈ 1.06
+
+---
+
+###  **Conclusion**:
+GARCH_c delivers the cleanest fit with perfectly whitened and well-scaled residuals. EGARCH_c performs worst, leaving volatility clustering unaddressed.
+- But we might be over fitting, for that we need the tests below
 """))
 
 #%%
 # Below works only for base GARCH fitted using arch package
+
+print("GARCH")
 print("AIC:", res_g.aic)
 print("BIC:", res_g.bic)
+print("EGARCH")
 print("AIC:", res_e.aic)
 print("BIC:", res_e.bic)
 #%%
@@ -712,8 +745,12 @@ def calculate_aic_bic(log_lik, num_params, num_obs):
 aic_g, bic_g = calculate_aic_bic(loglik_g, k_g, T_g)
 aic_e, bic_e = calculate_aic_bic(loglik_e, k_e, T_e)
 
-print("GARCH AIC:", aic_g, "BIC:", bic_g)
-print("EGARCH AIC:", aic_e, "BIC:", bic_e)
+print("GARCH_c")
+print("AIC:", aic_g) 
+print("BIC:", bic_g)
+print("EGARCH_c")
+print("AIC:", aic_e)
+print("BIC:", bic_e)
 
 #%%
 display(Markdown("""
