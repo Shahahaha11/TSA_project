@@ -1,7 +1,28 @@
 #%%
 # The following environment is selected
 # ~/TSA_project/.venv/bin/python
-# 
+
+#%% 
+from IPython.display import Markdown, display
+display(Markdown("""
+# 1. Data Collection and Portfolio Construction  
+**Objective:** To create a diversified, equally weighted portfolio comprising five financial instruments across distinct asset classes, and prepare the dataset for volatility modeling.  
+Data was collected for the period from 2020-05-01 to 2025-05-01.  
+
+**Instruments chosen:**  
+- S&P 500 Index (Equity Index)  
+- Apple Inc. (Stock)  
+- EUR/USD (Currency Pair)  
+- Gold Futures (Commodity)  
+- Ethereum (Cryptocurrency)  
+
+All instruments were sourced using Yahoo Finance (`yfinance` package).  
+Daily adjusted closing prices were aligned across all instruments.  
+The portfolio was constructed with equal weights (20%) and daily log returns were calculated.
+"""))
+
+#%% 
+
 import pandas as pd
 import numpy as np
 import datetime as dt
@@ -24,6 +45,8 @@ from scipy import stats
 from curl_cffi import requests
 from scipy.stats import norm
 from scipy.optimize import minimize
+#from arch.unitroot import arch_unitroot_test
+from statsmodels.stats.diagnostic import acorr_ljungbox
 
 
 
@@ -97,7 +120,30 @@ df.columns
 train = prices.iloc[:-261]  
 test  = prices.iloc[-261:] 
 #%%
-test.head()
+# Plot time series of returns
+plt.figure(figsize=(12, 4))
+plt.plot(train['portfolio'])
+plt.title('Time Series of Portfolio Log Returns')
+plt.grid(True)
+plt.show()
+#%%
+# Plot squared returns
+plt.figure(figsize=(12, 4))
+plt.plot(train['portfolio'] ** 2)
+plt.title('Time Series of Squared Returns')
+plt.grid(True)
+plt.show()
+
+#%%
+# Histogram
+plt.figure(figsize=(8, 4))
+sns.histplot(train['portfolio'], bins=50, kde=True)
+x = np.linspace(train['portfolio'].min(), train['portfolio'].max(), 100)
+plt.plot(x, norm.pdf(x, train['portfolio'].mean(), train['portfolio'].std()), 'r-', linewidth=2)
+plt.title('Histogram of Portfolio Log Returns')
+plt.grid(True)
+plt.show()
+
 #%% 
 # Autocorrelation function of log returns, maybe not!
 tun_tun_tun_sahur = pacf
@@ -120,20 +166,24 @@ plt.axhline(y=-1.96/np.sqrt(len(train['portfolio'])), linestyle='--', color='gra
 plt.axhline(y=1.96/np.sqrt(len(train['portfolio'])), linestyle='--', color='gray')
 plt.title(f'{tun_tun_tun_sahur.__name__} of Log Returns of ')
 plt.show()
-#%% [markdown]
-# Looking at the PACF we can say with a 95% confidence that the log price difference 9 days, 24 days and 26 days ago
-# are (non linear independent from other lags) correlated with today's price change. 
-# Since our ACF and PACF look  almost identical 
-# This suggests both ARCH and GARCH effects are present and intertwined.
-# In other words shocks (eps^2) and volatility persistence (sig^2) both influence current volatility. 
-# hence for the q part we keep lags equal to 1 only, to reduce computational power and for p we start with testing for lags 1,2,3,5,25
+#%%
+display(Markdown("""
+### PACF Interpretation and Lag Selection Strategy
+
+Looking at the PACF, we can say with 95% confidence that the log price differences from 9, 24, and 26 days ago  
+are significantly correlated with today's price change, independent of other lags.  
+Since the ACF and PACF patterns look nearly identical, this suggests that both **ARCH** (shock-driven) and **GARCH** (volatility persistence) effects are present and intertwined.  
+In other words, both squared shocks (ε²) and past variances (σ²) influence current volatility.  
+Therefore, for the **GARCH lag (`q`)**, we keep it minimal (lag 1) to save computation.  
+For the **ARCH lag (`p`)**, we test the specific lags: 1, 2, 3, 5, and 25.
+"""))
 #%%
 print("Basic statistics:")
 print(train['portfolio'].describe())
 print("\nSkewness:", stats.skew(train['portfolio'].dropna()))
 print("Kurtosis:", stats.kurtosis(train['portfolio'].dropna()))
 #%% [markdown]
-#The returns show a slight left skew, meaning small losses occur a bit more frequently than gains. Additionally, the kurtosis is higher than 3, indicating fat tails—so extreme returns, both positive and negative, happen more often than would be expected in a normal distribution. This suggests the data is not perfectly symmetric and has a higher chance of large shocks.
+display(Markdown("""The returns show a slight left skew, meaning small losses occur a bit more frequently than gains. Additionally, the kurtosis is higher than 3, indicating fat tails—so extreme returns, both positive and negative, happen more often than would be expected in a normal distribution. This suggests the data is not perfectly symmetric and has a higher chance of large shocks."""))
 #%%
 # Histogram of log returns
 plt.figure(figsize=(12, 6))
@@ -168,14 +218,21 @@ plt.show()
 
 
 #%% [markdown]
-# We have high kurtosis, fat tails. pretty inconsistent for a normal distribution.
-# We also strongly reject the null hypothesis of JB, hence the sample does not come from a normal distribution.
-#  **QQ -plot**
-# The left tail is much thicker, we can also observe skewness here (left is more extreme).
-# The left tail shows more extreme values, which arguably signals volatility clustering.
-# The Probability distribution is much higher at smaller returns. 
-# Which might show the snow ball effect of a bear. 
-# But we cant prove that with just QQ plot, so we check LM test.
+display(Markdown("""
+### **Normality and Distributional Characteristics**
+
+- We observe **high kurtosis** and **fat tails**, which are inconsistent with a normal distribution.  
+- The **Jarque-Bera test** strongly rejects the null hypothesis, confirming the sample does not follow normality.  
+
+---
+
+### **Q-Q Plot Observations**
+
+- The **left tail is much thicker**, suggesting negative skewness and potential asymmetry.  
+- This skew and fat tail may signal **volatility clustering**.  
+- The **probability mass is concentrated around small negative returns**, which may hint at a snowball effect during downturns (bear phase).  
+- However, this is **not conclusive from the Q-Q plot alone** — we confirm with the **ARCH LM test** next.
+"""))
 
 #%%
 # ARCH test (Engle's LM test)
@@ -196,9 +253,14 @@ print(f"F p-value: {arch_test_results[3]:.3f}")
 #%%
 
 # [markdown]
-# Strong ARCH effect on the equally weighted portfolio
-# For recreational research we can compare this with a min-variance weighted portfolio
-# and test if this arch effect is overcome by an efficient frontier. 
+display(Markdown("""
+### ARCH Effect and Portfolio Weighting
+
+- A **strong ARCH effect** is observed in the equally weighted portfolio.  
+- For further exploration, we can compare this with a **minimum-variance weighted portfolio**.  
+- This helps test whether the ARCH effect can be reduced by positioning along the **efficient frontier**.
+"""))
+
 #%%
 def plot_sharpe_frontier(df, rf=0.0, n_portfolios=5_000, use_full=False):
     """
@@ -344,8 +406,8 @@ adf_test(train['portfolio'])
 train.head()
 
 #%%
-def fit_garch(train_returns_pct):
-    model = arch_model(train_returns_pct, vol='GARCH', p=1, q=1, dist='normal')
+def fit_garch(train_returns_pct, p =1, q=1):
+    model = arch_model(train_returns_pct, vol='GARCH', p=p, q=q, dist='normal')
     res   = model.fit(disp='off')
     alpha = res.params["alpha[1]"]
     beta  = res.params["beta[1]"]
@@ -355,7 +417,23 @@ def fit_garch(train_returns_pct):
     return res, alpha, beta
 
 #%%
+# --- 1. fit EGARCH once to get in-sample annualized σ̂ ----------------------
+def fit_egarch(train_returns_pct, p=1, o=1, q=1):
 
+    model = arch_model(train_returns_pct, vol='EGARCH',
+                       p=p, o=o, q=q, dist='normal')
+    res   = model.fit(disp='off')
+    alpha = res.params["alpha[1]"]
+    beta  = res.params["beta[1]"]
+    ann_sigma_pct = res.conditional_volatility * np.sqrt(252)
+    res.ann_cond_std = ann_sigma_pct / 100      # store as decimals
+    return res, alpha, beta
+
+
+
+#%%[markdown]
+# For EGARCH the persistence metric is just β
+#%%
 def fit_garch_custom_lags(train_returns_pct, arch_lags=[1,2,4], garch_lags=[1,3,6]):
     r = train_returns_pct.values if hasattr(train_returns_pct, 'values') else train_returns_pct
     T = len(r)
@@ -394,7 +472,15 @@ def fit_garch_custom_lags(train_returns_pct, arch_lags=[1,2,4], garch_lags=[1,3,
         conditional_volatility = np.sqrt(sig2)
         ann_cond_std = ann_sigma_pct / 100
 
-    return Res, np.sum(alpha_vals), np.sum(beta_vals)
+    return Res, np.sum(alpha_vals), np.sum(beta_vals), -result.fun, T, len(result.x)
+#%%
+display(Markdown("""
+### Mapping for AIC/BIC Calculation from Custom Model
+
+- `-result.fun` → Returns the **log-likelihood** (since we minimized the negative log-likelihood).  
+- `len(result.x)` → Total **number of estimated parameters** (ω, α₁...αₚ, β₁...β_q).  
+- `T` → Number of **observations** used in the model fitting.
+"""))
 
 #%%
 def fit_egarch_custom_lags(train_returns_pct, arch_lags=[1,2,3,5,25], garch_lags=[1,2]):
@@ -438,25 +524,8 @@ def fit_egarch_custom_lags(train_returns_pct, arch_lags=[1,2,3,5,25], garch_lags
         conditional_volatility = np.sqrt(sig2)
         ann_cond_std = ann_sigma_pct / 100
 
-    return Res, np.sum(alpha_vals), np.sum(beta_vals)
+    return Res, np.sum(alpha_vals), np.sum(beta_vals), -result.fun, T, len(result.x)
 
-#%%
-# --- 1. fit EGARCH once to get in-sample annualized σ̂ ----------------------
-def fit_egarch(train_returns_pct):
-
-    model = arch_model(train_returns_pct, vol='EGARCH',
-                       p=1, o=1, q=1, dist='normal')
-    res   = model.fit(disp='off')
-    alpha = res.params["alpha[1]"]
-    beta  = res.params["beta[1]"]
-    ann_sigma_pct = res.conditional_volatility * np.sqrt(252)
-    res.ann_cond_std = ann_sigma_pct / 100      # store as decimals
-    return res, alpha, beta
-
-
-
-#%%[markdown]
-# For EGARCH the persistence metric is just β
 #%%
 from scipy.stats import norm
 
@@ -476,13 +545,20 @@ def rolling_garch_var(train_test, alpha=0.05, window=None, vol='GARCH'):
             train_slice = train_test.loc[:t - pd.Timedelta(days=1)]
 
         # fit chosen model
+        """
         if vol == 'GARCH':
             res, alpha, beta = fit_garch_custom_lags(train_slice * 100, arch_lags=[1,2,4], garch_lags=[1,3,6])
         else:
             res, alpha, beta = fit_egarch_custom_lags(train_slice * 100, arch_lags=[1,2,4], garch_lags=[1,3,6])
+        """
+        if vol == 'GARCH':
+            res, alpha, beta = fit_garch(train_slice * 100)
+        else:
+            res, alpha, beta = fit_egarch(train_slice * 100)
 
         # last conditional volatility as 1-day ahead forecast
-        sigma = res.conditional_volatility[-1] / 100
+        sigma = res.conditional_volatility.iloc[-1] / 100
+
         VaR_t = -norm.ppf(alpha) * sigma
         sig2_pct = (sigma * 100)**2  # convert back to percent squared
 
@@ -496,11 +572,9 @@ def rolling_garch_var(train_test, alpha=0.05, window=None, vol='GARCH'):
 def main(train, test, alpha=0.05, window=None):
     train = train.copy()
     # --- in-sample fits ----------------------------------------------------
-    """res_g ,alpha_gar, beta_gar= fit_garch(train['portfolio'] * 100)"""
-    """res_e , alpha_egar, beta_egar= fit_egarch(train['portfolio'] * 100)"""
-    res_g, alpha_gar, beta_gar = fit_garch_custom_lags(train['portfolio'] * 100,  arch_lags=[1,2,3,5,25], garch_lags=[1,2])
-    res_e, alpha_egar, beta_egar = fit_egarch_custom_lags(train['portfolio'] * 100,  arch_lags=[1,2,3,5,25], garch_lags=[1,2])
-    
+    res_g ,alpha_gar, beta_gar= fit_garch(train['portfolio'] * 100, p=1, q=1)
+    res_e , alpha_egar, beta_egar= fit_egarch(train['portfolio'] * 100, p=1, o=1, q=1)
+
     train['ann_sigma_garch']  = res_g.ann_cond_std
     train['ann_sigma_egarch'] = res_e.ann_cond_std
 
@@ -525,7 +599,40 @@ def main(train, test, alpha=0.05, window=None):
     test['portfolio'].plot(ax=ax, alpha=0.4, label='Returns')
     ax.set_title('Rolling 1-day VaR: GARCH vs. EGARCH'); ax.legend()
     plt.show()
+    return res_g, res_e 
+#%%
+def main_mod(train, test, alpha=0.05, window=None):
+    train = train.copy()
+    # --- in-sample fits ----------------------------------------------------
+    res_gc, alpha_gar, beta_gar, loglik_g, T_g, k_g= fit_garch_custom_lags(train['portfolio'] * 100,  arch_lags=[1,2,3,5,25], garch_lags=[1,2,3,5,25])
+    res_ec, alpha_egar, beta_egar, loglik_e, T_e, k_e = fit_egarch_custom_lags(train['portfolio'] * 100,  arch_lags=[1,2,3,5,25], garch_lags=[1,2,3,5,25])
+
+    train['ann_sigma_garch']  = res_g.ann_cond_std
+    train['ann_sigma_egarch'] = res_e.ann_cond_std
+
+    persistence_gar_c = alpha_gar + beta_gar
+    print('alpha+beta for GARCH_c:', persistence_gar_c)
+
+    persistence_egar_c = beta_egar
+    print('alpha+beta for EGARCH_c:', persistence_egar_c)
     
+    # --- rolling out-of-sample -------------------------------------------
+    full_ret  = pd.concat([train['portfolio'], test['portfolio']])
+    global train_end; train_end = train.index[-1]
+
+    pred_var_g, VaR_gc = rolling_garch_var(full_ret, alpha=alpha,
+                                          window=window, vol='GARCH')
+    pred_var_e, VaR_ec = rolling_garch_var(full_ret, alpha=alpha,
+                                          window=window, vol='EGARCH')
+
+    ax = VaR_gc.plot(label='GARCH VaR', figsize=(10,4))
+    VaR_ec.plot(ax=ax, label='EGARCH VaR')
+    test['portfolio'].plot(ax=ax, alpha=0.4, label='Returns')
+    ax.set_title('Rolling 1-day VaR: GARCH vs. EGARCH {Custom lags}'); ax.legend()
+    plt.show()
+    return res_gc, res_ec , loglik_e, T_e, k_e, loglik_g, T_g, k_g
+#%%
+
 #%%[markdown]
 #<br>The precise crossing point marks the instant when the realised shock equals the forecast quantile; everything outside is an exceedance, 
 #<br>The returns above the GARCH rolling part is where the model has been breached
@@ -534,11 +641,12 @@ def main(train, test, alpha=0.05, window=None):
 
 #%%
 if __name__ == "__main__":
-    # assume you already sliced your data
-    # train  : DataFrame with column 'portfolio', DatetimeIndex
-    # test   : same structure, later dates
-    main(train, test, alpha=0.05, window=None)   # window=None → expanding
-    # e.g. main(train, test, alpha=0.05, window=252)  # 1-year rolling window
+    # pick one version to run
+    res_g, res_e = main(train, test)
+    # or
+    res_gc, res_ec, loglik_e, T_e, k_e, loglik_g, T_g, k_g = main_mod(train, test)
+#%%
+res_g, res_e, loglik_e, T_e, k_e, loglik_g, T_g, k_g = main_mod(train, test)
 
 #%% [markdown]
 # **Workflow:**
@@ -548,26 +656,72 @@ if __name__ == "__main__":
 
 
 #%%
+from statsmodels.stats.diagnostic import acorr_ljungbox
+from arch.__future__ import reindexing
 
-def compute_single_var_from_garch(train, test_index, alpha=0.05):
-    y_pct = train['portfolio'] * 100
-    model = arch_model(y_pct, vol='GARCH', p=1, q=1, dist='normal')
-    res = model.fit(disp='off')
+def run_diagnostics(train_returns_pct, res, label='GARCH'):
+    returns = train_returns_pct.values
+    fitted_vol = res.conditional_volatility
+    residuals = returns  # mean is assumed 0
+    standardized_resid = residuals / fitted_vol
 
-    h1_var_pct = res.forecast(horizon=1, reindex=False).variance.values[-1, 0]
-    # Use this for VaR of each forecasted day
-    # h1_var_pct = res.forecast(horizon=len(test_index), reindex=False).variance.values[-1]
-    sigma_pct = np.sqrt(h1_var_pct)
-    z = norm.ppf(alpha)
-    VaR = -(z * sigma_pct) / 100
+    print(f"\nDiagnostics for {label} model:")
+    
+    lb1 = acorr_ljungbox(standardized_resid, lags=[10], return_df=True)
+    print(f"Ljung-Box on residuals (lag 10): p-value = {lb1['lb_pvalue'].values[0]:.4f}")
+    
 
-    return VaR
+    lb2 = acorr_ljungbox(standardized_resid**2, lags=[10], return_df=True)
+    print(f"Ljung-Box on squared residuals (lag 10): p-value = {lb2['lb_pvalue'].values[0]:.4f}")
+    
+    from arch.__future__ import reindexing
+    
+    print("Standard deviation of residuals:", np.std(standardized_resid))
+#%%
+from statsmodels.stats.diagnostic import acorr_ljungbox
 
+run_diagnostics(train['portfolio'] * 100, res_g, label='GARCH')
+run_diagnostics(train['portfolio'] * 100, res_e, label='EGARCH')
 #%%
 
-print(compute_single_var_from_garch(train, test.index))
-#%% [markdown] 
-# The function compute_single_var_from_garch as it says, outputs a single value (at-risk) for the next day in train
-# <br>**VAR Interpretation:** 
-# At the 95 % confidence level, tomorrow’s one-day VaR is 1.73 % of portfolio value—i.e., there’s only a 5 % chance the loss will exceed 1.73 % in the next trading day.
+run_diagnostics(train['portfolio'] * 100, res_gc, label='GARCH')
+run_diagnostics(train['portfolio'] * 100, res_ec, label='EGARCH')
 #%%
+display(Markdown("""
+### Comparison: Custom GARCH vs. ARCH Package Models
+
+- **GARCH (Custom vs. ARCH package):** Both models perform well, but the custom GARCH shows slightly better residual diagnostics (higher p-values, lower standard deviation).  
+- **EGARCH (Custom vs. ARCH package):** The ARCH package EGARCH is more balanced, while the custom EGARCH leaves a noticeable ARCH effect and slightly over-scales residuals (standard deviation > 1).  
+- **Overall Conclusion:** Custom GARCH is robust and effective; however, the ARCH package EGARCH provides a cleaner and more reliable specification.
+"""))
+
+#%%
+# Below works only for base GARCH fitted using arch package
+print("AIC:", res_g.aic)
+print("BIC:", res_g.bic)
+print("AIC:", res_e.aic)
+print("BIC:", res_e.bic)
+#%%
+import numpy as np
+
+def calculate_aic_bic(log_lik, num_params, num_obs):
+    aic = -2 * log_lik + 2 * num_params
+    bic = -2 * log_lik + np.log(num_obs) * num_params
+    return aic, bic
+
+aic_g, bic_g = calculate_aic_bic(loglik_g, k_g, T_g)
+aic_e, bic_e = calculate_aic_bic(loglik_e, k_e, T_e)
+
+print("GARCH AIC:", aic_g, "BIC:", bic_g)
+print("EGARCH AIC:", aic_e, "BIC:", bic_e)
+
+#%%
+display(Markdown("""
+### Model Fit Comparison: AIC and BIC
+
+- **EGARCH has a lower AIC**, suggesting a slightly better overall fit to the data.  
+- **BIC values are similar**, meaning both models have comparable complexity.  
+- Overall, **EGARCH performs slightly better** in capturing the volatility pattern.
+"""))
+
+# %%
