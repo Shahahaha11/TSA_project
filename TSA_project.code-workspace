@@ -8,6 +8,6 @@
 		"jupyter.interactiveWindow.textEditor.executeSelection": true,
 		"python.REPL.enableREPLSmartSend": true,
 		"interactiveWindow.executeWithShiftEnter": true,
-		"editor.fontSize": 11
+		"editor.fontSize": 14
 	}
 }
