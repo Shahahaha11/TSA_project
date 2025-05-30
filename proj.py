@@ -207,6 +207,12 @@ plt.show()
 train[['Company_Stock', 'Crypto', 'FX_Pair', 'Commodity', 'Equity_Index', 'portfolio']].plot(figsize=(10, 6), title="PLOT")
 plt.show()
 #%%
+cols = ['Company_Stock', 'Crypto', 'FX_Pair', 'Commodity', 'Equity_Index']
+
+train[cols].div(train[cols].iloc[0]).mul(100).plot(figsize=(10, 6), title="Rebased (t₀ = 100)")
+plt.show()
+
+#%%
 ############# ADF TEST ##############
 train.columns
 
@@ -569,38 +575,6 @@ def rolling_garch_var(train_test, alpha=0.05, window=None, vol='GARCH'):
 
     return (pd.Series(sig2_list, index=test_index, name=f'{vol}_σ2'),
             pd.Series(var_list,  index=test_index, name=f'{vol}_VaR'))
-#%%
-def rolling_garch_c_var(train_test, alpha=0.05, window=1, vol='GARCH'):
-    """
-    Rolling one-day VaR and σ² with either GARCH or EGARCH.
-    Set vol='GARCH' (default) or vol='EGARCH'.
-    """
-    test_index = train_test.index[train_test.index > train_end]
-    sig2_list, var_list = [], []
-
-    for t in test_index:
-        # training slice (expanding or fixed)
-        if window:
-            train_slice = train_test.loc[:t - pd.Timedelta(days=1)].tail(window)
-        else:
-            train_slice = train_test.loc[:t - pd.Timedelta(days=1)]
-
-        # fit chosen model
-        if vol == 'GARCH':
-            res, alpha, beta, loglik_g, T_g, k_g = fit_garch_custom_lags(train_slice * 100, arch_lags=[1,2,3,5,25], garch_lags=[1,2])
-        else:
-            res, alpha, beta, loglik_g, T_g, k_g = fit_egarch_custom_lags(train_slice * 100, arch_lags=[1,2,3,5,25], garch_lags=[1,2])
-        # last conditional volatility as 1-day ahead forecast
-        sigma = res.conditional_volatility[-1]      / 100
-        VaR_t = -norm.ppf(alpha) * sigma
-        sig2_pct = (sigma * 100)**2  # convert back to percent squared
-
-        sig2_list.append(sig2_pct / 1e4)   # store as decimal variance
-        var_list.append(VaR_t)
-
-    return (pd.Series(sig2_list, index=test_index, name=f'{vol}_σ2'),
-            pd.Series(var_list,  index=test_index, name=f'{vol}_VaR'))
-
 
 #%%
 def violation_ratio(returns, var):
@@ -642,46 +616,6 @@ def main(train, test, alpha=0.05, window=None):
     ax.set_title('Rolling 1-day VaR: GARCH vs. EGARCH'); ax.legend()
     plt.show()
     return res_g, res_e, VaR_g, VaR_e, vr_g, vr_e
-#%%
-def main_mod(train, test, alpha=0.05, window=None):
-    train = train.copy()
-    # --- in-sample fits ----------------------------------------------------
-    res_gc, alpha_gar, beta_gar, loglik_g, T_g, k_g= fit_garch_custom_lags(train['portfolio'] * 100,  arch_lags=[1,2,3,5,25], garch_lags=[1,2,3,5,25])
-    res_ec, alpha_egar, beta_egar, loglik_e, T_e, k_e = fit_egarch_custom_lags(train['portfolio'] * 100,  arch_lags=[1,2,3,5,25], garch_lags=[1,2,3,5,25])
-
-    train['ann_sigma_garch']  = res_g.ann_cond_std
-    train['ann_sigma_egarch'] = res_e.ann_cond_std
-
-    persistence_gar_c = alpha_gar + beta_gar
-    print('alpha+beta for GARCH_c:', persistence_gar_c)
-
-    persistence_egar_c = beta_egar
-    print('beta for EGARCH_c:', persistence_egar_c)
-    
-    # --- rolling out-of-sample -------------------------------------------
-    full_ret  = pd.concat([train['portfolio'], test['portfolio']])
-    global train_end; train_end = train.index[-1]
-
-    pred_var_g, VaR_gc = rolling_garch_c_var(full_ret, alpha=alpha,
-                                          window=window, vol='GARCH')
-    pred_var_e, VaR_ec = rolling_garch_c_var(full_ret, alpha=alpha,
-                                          window=window, vol='EGARCH')
-
-    ax = VaR_gc.plot(label='GARCH VaR', figsize=(10,4))
-    VaR_ec.plot(ax=ax, label='EGARCH VaR')
-    test['portfolio'].plot(ax=ax, alpha=0.4, label='Returns')
-    ax.set_title('Rolling 1-day VaR: GARCH vs. EGARCH {Custom lags}'); ax.legend()
-    plt.show()
-    pred_var_g, VaR_gc = rolling_garch_var(full_ret, alpha=alpha, window=window, vol='GARCH')
-    pred_var_e, VaR_ec = rolling_garch_var(full_ret, alpha=alpha, window=window, vol='EGARCH')
-
-    # Now compute breach rates _using_ those VaR series:
-    vr_gc = violation_ratio(test['portfolio'], VaR_gc.loc[test.index])
-    vr_ec = violation_ratio(test['portfolio'], VaR_ec.loc[test.index])
-    print(f"GARCH_c breach rate: {vr_gc*100:.2f}%")
-    print(f"EGARCH_c breach rate: {vr_ec*100:.2f}%")
-
-    return res_gc, res_ec, loglik_e, T_e, k_e, loglik_g, T_g, k_g, VaR_gc, VaR_ec
 
 #%%[markdown]
 #<br>The precise crossing point marks the instant when the realised shock equals the forecast quantile; everything outside is an exceedance, 
@@ -693,8 +627,6 @@ def main_mod(train, test, alpha=0.05, window=None):
 if __name__ == "__main__":
     # pick one version to run
     res_g, res_e, VaR_g, VaR_e, vr_g, vr_e = main(train, test)
-
-    res_gc, res_ec, loglik_e, T_e, k_e, loglik_g, T_g, k_g, VaR_gc, VaR_ec = main_mod(train, test)
 
 #%%
 from statsmodels.stats.diagnostic import acorr_ljungbox
@@ -721,10 +653,7 @@ from statsmodels.stats.diagnostic import acorr_ljungbox
 
 run_diagnostics(train['portfolio'] * 100, res_g, label='GARCH')
 run_diagnostics(train['portfolio'] * 100, res_e, label='EGARCH')
-#%%
 
-run_diagnostics(train['portfolio'] * 100, res_gc, label='GARCH_c')
-run_diagnostics(train['portfolio'] * 100, res_ec, label='EGARCH_c')
 #%%
 display(Markdown("""
 ### Model Comparison: GARCH vs EGARCH
