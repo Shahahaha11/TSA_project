@@ -422,7 +422,7 @@ print(tan_weights)   # max-Sharpe (tangency) weights
 
 #%%
 def fit_garch(train_returns_pct, p =1, q=1):
-    model = arch_model(train_returns_pct, vol='GARCH', p=p, q=q, dist='normal')
+    model = arch_model(train_returns_pct, vol='GARCH', p=p, q=q, dist='t')
     res   = model.fit(disp='off')
     alpha = res.params["alpha[1]"]
     beta  = res.params["beta[1]"]
@@ -436,7 +436,7 @@ def fit_garch(train_returns_pct, p =1, q=1):
 def fit_egarch(train_returns_pct, p=1, o=1, q=1):
 
     model = arch_model(train_returns_pct, vol='EGARCH',
-                       p=p, o=o, q=q, dist='normal')
+                       p=p, o=o, q=q, dist='t')
     res   = model.fit(disp='off')
     alpha = res.params["alpha[1]"]
     beta  = res.params["beta[1]"]
@@ -449,46 +449,6 @@ def fit_egarch(train_returns_pct, p=1, o=1, q=1):
 #%%[markdown]
 # For EGARCH the persistence metric is just β
 #%%
-def fit_garch_custom_lags(train_returns_pct, arch_lags=[1,2,4], garch_lags=[1,3,6]):
-    r = train_returns_pct.values if hasattr(train_returns_pct, 'values') else train_returns_pct
-    T = len(r)
-    max_lag = max(arch_lags + garch_lags)
-
-    def neg_log_lik(params):
-        omega = params[0]
-        alpha = params[1 : 1 + len(arch_lags)]
-        beta = params[1 + len(arch_lags):]
-        sig2 = np.ones(T) * np.var(r)
-        for t in range(max_lag, T):
-            sig2[t] = omega \
-                    + sum(alpha[i] * r[t - lag]**2 for i, lag in enumerate(arch_lags)) \
-                    + sum(beta[j] * sig2[t - lag] for j, lag in enumerate(garch_lags))
-        ll = -0.5 * (np.log(2 * np.pi) + np.log(sig2) + r**2 / sig2)
-        return -np.sum(ll)
-
-    k = 1 + len(arch_lags) + len(garch_lags)
-    init = np.ones(k) * 0.1
-    bounds = [(1e-6, 1.0)] * k
-    result = minimize(neg_log_lik, init, bounds=bounds)
-
-    omega = result.x[0]
-    alpha_vals = result.x[1 : 1 + len(arch_lags)]
-    beta_vals = result.x[1 + len(arch_lags):]
-
-    sig2 = np.ones(T) * np.var(r)
-    for t in range(max_lag, T):
-        sig2[t] = omega \
-                + sum(alpha_vals[i] * r[t - lag]**2 for i, lag in enumerate(arch_lags)) \
-                + sum(beta_vals[j] * sig2[t - lag] for j, lag in enumerate(garch_lags))
-
-    ann_sigma_pct = np.sqrt(sig2) * np.sqrt(252)
-
-    class Res:
-        conditional_volatility = np.sqrt(sig2)
-        ann_cond_std = ann_sigma_pct / 100
-
-    return Res, np.sum(alpha_vals), np.sum(beta_vals), -result.fun, T, len(result.x)
-#%%
 display(Markdown("""
 ### Mapping for AIC/BIC Calculation from Custom Model
 
@@ -496,50 +456,6 @@ display(Markdown("""
 - `len(result.x)` → Total **number of estimated parameters** (ω, α₁...αₚ, β₁...β_q).  
 - `T` → Number of **observations** used in the model fitting.
 """))
-
-#%%
-def fit_egarch_custom_lags(train_returns_pct, arch_lags=[1,2,3,5,25], garch_lags=[1,2]):
-    r = train_returns_pct.values if hasattr(train_returns_pct, 'values') else train_returns_pct
-    T = len(r)
-    max_lag = max(arch_lags + garch_lags)
-
-    def neg_log_lik(params):
-        omega = params[0]
-        alpha = params[1 : 1 + len(arch_lags)]
-        beta = params[1 + len(arch_lags):]
-        sig2 = np.ones(T) * np.var(r)
-        for t in range(max_lag, T):
-            sig2[t] = omega \
-                    + sum(alpha[i] * r[t - lag]**2 for i, lag in enumerate(arch_lags)) \
-                    + sum(beta[j] * sig2[t - lag] for j, lag in enumerate(garch_lags))
-        ll = -0.5 * (np.log(2 * np.pi) + np.log(sig2) + r**2 / sig2)
-        return -np.sum(ll)
-
-    k = 1 + len(arch_lags) + len(garch_lags)
-    init = np.ones(k) * 0.1
-    bounds = [(1e-6, 1.0)] * k
-    result = minimize(neg_log_lik, init, bounds=bounds)
-
-    omega = result.x[0]
-    alpha_vals = result.x[1 : 1 + len(arch_lags)]
-    beta_vals = result.x[1 + len(arch_lags):]
-
-    sig2 = np.ones(T) * np.var(r)
-    for t in range(max_lag, T):
-        log_sig2 = np.ones(T) * np.log(np.var(r))
-        for t in range(max_lag, T):
-            arch_part  = sum(alpha_vals[i] * (np.abs(r[t - lag]) - np.sqrt(2/np.pi)) for i, lag in enumerate(arch_lags))
-            garch_part = sum(beta_vals[j] * log_sig2[t - lag] for j, lag in enumerate(garch_lags))
-            log_sig2[t] = omega + arch_part + garch_part
-        sig2 = np.exp(log_sig2)
-
-    ann_sigma_pct = np.sqrt(sig2) * np.sqrt(252)
-
-    class Res:
-        conditional_volatility = np.sqrt(sig2)
-        ann_cond_std = ann_sigma_pct / 100
-
-    return Res, np.sum(alpha_vals), np.sum(beta_vals), -result.fun, T, len(result.x)
 
 #%%
 from scipy.stats import norm
