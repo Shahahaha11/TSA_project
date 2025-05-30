@@ -469,7 +469,7 @@ def rolling_garch_var(train_test, alpha=0.05, window=None, vol='GARCH'):
     sig2_list, var_list = [], []
 
     for t in test_index:
-        # training slice (expanding or fixed)
+        # training slice expanding
         if window:
             train_slice = train_test.loc[:t - pd.Timedelta(days=1)].tail(window)
         else:
@@ -519,17 +519,32 @@ def main(train, test, alpha=0.05, window=None):
                                           window=window, vol='GARCH')
     _, VaR_e = rolling_garch_var(full_ret, alpha=alpha,
                                           window=window, vol='EGARCH')
-     # --- breach rates ------------------------------------------------------
+     # --- out  of sample breach rates ------------------------------------------------------
     vr_g = violation_ratio(test['portfolio'], VaR_g.loc[test.index])
     vr_e = violation_ratio(test['portfolio'], VaR_e.loc[test.index])
-    print(f"GARCH breach rate: {vr_g*100:.2f}%")
-    print(f"EGARCH breach rate: {vr_e*100:.2f}%")
-    # --- quick comparison plot -------------------------------------------
+    print(f"GARCH breach rate OoS: {vr_g*100:.2f}%")
+    print(f"EGARCH breach rate OoS: {vr_e*100:.2f}%")
+    
+    VaR_g_is = -norm.ppf(alpha) * res_g.conditional_volatility / 100
+    VaR_e_is = -norm.ppf(alpha) * res_e.conditional_volatility / 100
+     # --- in sample breach rates ------------------------------------------------------
+    vr_g = violation_ratio(train['portfolio'], VaR_g_is)
+    vr_e = violation_ratio(train['portfolio'], VaR_e_is)
+    print(f"GARCH breach rate IS: {vr_g*100:.2f}%")
+    print(f"EGARCH breach rate IS: {vr_e*100:.2f}%")
+    
+    # --- plot - In sample -------------------------------------------------------------
+    ax = VaR_g_is.plot(label='GARCH VaR', figsize=(10,4))
+    VaR_e_is.plot(ax=ax, label='EGARCH VaR')
+    train['portfolio'].plot(ax=ax, alpha=0.4, label='Returns')
+    ax.set_title('In-sample VaR: GARCH vs. EGARCH'); ax.legend()
+    plt.show()
+    # --- plot - Out of Sample -------------------------------------------
     
     ax = VaR_g.plot(label='GARCH VaR', figsize=(10,4))
     VaR_e.plot(ax=ax, label='EGARCH VaR')
     test['portfolio'].plot(ax=ax, alpha=0.4, label='Returns')
-    ax.set_title('Rolling 1-day VaR: GARCH vs. EGARCH'); ax.legend()
+    ax.set_title('Rolling VaR: GARCH vs. EGARCH'); ax.legend()
     plt.show()
     return res_g, res_e, VaR_g, VaR_e, vr_g, vr_e
 
@@ -543,6 +558,14 @@ def main(train, test, alpha=0.05, window=None):
 if __name__ == "__main__":
     # pick one version to run
     res_g, res_e, VaR_g, VaR_e, vr_g, vr_e = main(train, test)
+
+
+
+
+
+
+
+
 
 #%%
 from statsmodels.stats.diagnostic import acorr_ljungbox
