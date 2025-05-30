@@ -548,11 +548,27 @@ def main(train, test, alpha=0.05, window=None):
     plt.show()
     return res_g, res_e, VaR_g, VaR_e, vr_g, vr_e
 
-#%%[markdown]
-#<br>The precise crossing point marks the instant when the realised shock equals the forecast quantile; everything outside is an exceedance, 
-#<br>The returns above the GARCH rolling part is where the model has been breached
-# i.e. tail risk the model failed to contain
-#<br> from alpha+beta we can say that the series has very high volatility persistence; shocks decay extremely slowly. Variance reverts, but at a very sluggish rate
+#%%
+display(Markdown("""
+- Fit GARCH(1,1) & EGARCH(1,1,1) on training returns.
+- Save annualised σ̂ to `train` for quick ref.
+- Print persistence α+β for each model.
+- Build `full_ret`, set `train_end` for rolling window.
+- Roll one-day OOS VaR with both models.
+- Compute OOS breach rates against test set.
+- Compute IS VaR directly from in-sample vols.
+- Compute IS breach rates against training set.
+- Plot IS VaR vs. training returns.
+- Plot OOS VaR vs. test returns.
+"""))
+#%%
+display(Markdown("""
+- **Model fits per variant (GARCH & EGARCH)**: 1 initial in-sample fit + *N_test* rolling re-fits ⇒ **N_test + 1** total.
+- **Parameter estimation count**: identical to fit count; each fit produces a fresh (ω, α, β, γ) set.
+- **Training period forecasting**: every σ²_t uses the single parameter set estimated from the full training block.
+- **Test period forecasting**: on day *t*, parameters are re-estimated from returns up to *t − 1* (expanding or fixed window) and used to forecast σ²_t.
+- **VaR threshold**: one-day, one-sided 95 % level (α = 0.05); VaR_t = –Φ⁻¹(0.95) · σ_t.
+"""))
 
 #%%
 if __name__ == "__main__":
@@ -560,6 +576,27 @@ if __name__ == "__main__":
     res_g, res_e, VaR_g, VaR_e, vr_g, vr_e = main(train, test)
 
 
+#%%
+display(Markdown("""
+# Model Workflow Cheat-Sheet (information on what the model is performing and where in the code)
+
+- **Initial in-sample fit per model**  
+  `res_g, _, _ = fit_garch(train['portfolio']*100);  res_e, _, _ = fit_egarch(train['portfolio']*100)`
+
+- **Daily re-fit in test window (expanding/fixed)**  
+  `res, _, _ = fit_garch(train_slice*100)`  # inside `rolling_garch_var` loop
+
+- **Training σ² uses single parameter set from full training block**  
+  `sigma_g = res_g.conditional_volatility / 100`
+
+- **Test σ² uses parameters re-estimated up to t-1**  
+  `sigma = res.conditional_volatility.iloc[-1] / 100`
+
+- **VaR threshold: one-day 95 % (α = 0.05)**  
+  `VaR_t = -norm.ppf(alpha) * sigma`
+"""))
+
+#%%
 
 
 
