@@ -417,8 +417,8 @@ print(gmv_weights)   # minimum-variance weights
 print(tan_weights)   # max-Sharpe (tangency) weights
 
 #%%
-def fit_garch(train_returns_pct, p =1, q=1):
-    model = arch_model(train_returns_pct, vol='GARCH', p=p, q=q, dist='t')
+def fit_garch(train_returns_pct, p =1, q=1, dist='ged'):
+    model = arch_model(train_returns_pct, vol='GARCH', p=p, q=q, dist=dist)
     res   = model.fit(disp='off')
     alpha = res.params["alpha[1]"]
     beta  = res.params["beta[1]"]
@@ -430,10 +430,10 @@ def fit_garch(train_returns_pct, p =1, q=1):
 
 #%%
 # --- 1. fit EGARCH once to get in-sample annualized σ̂ ----------------------
-def fit_egarch(train_returns_pct, p=1, o=1, q=1, start_params=None):
+def fit_egarch(train_returns_pct, p=1, o=1, q=1, dist = 'ged', start_params=None):
 
     model = arch_model(train_returns_pct, vol='EGARCH',
-                       p=p, o=o, q=q, dist='t')
+                       p=p, o=o, q=q, dist=dist)
     res   = model.fit(disp='off', starting_values=start_params)
     alpha = res.params["alpha[1]"]
     beta  = res.params["beta[1]"]
@@ -444,12 +444,10 @@ def fit_egarch(train_returns_pct, p=1, o=1, q=1, start_params=None):
     return res, alpha, beta, std_resid
 
 #%%
-
 def rolling_garch_var(train_test, split_idx, alpha=0.05, window=None,
-                      p=1, q=1, o=1, vol='GARCH', start_params=None):
+                      p=1, q=1, o=1, vol='GARCH', dist= 'ged', start_params=None):
     
-    start_params = np.array([0.0, 0.0, 0.05, 0.0, 0.90, 8.0])
-    start_params_1 = np.array([0.0, 0.0, 0.05, 0.0, 0.90, 8.0])
+    start_params = start_params
     test_index  = train_test.loc[split_idx:].index[1:]
     sig2_list, var_list = [], []
 
@@ -459,9 +457,9 @@ def rolling_garch_var(train_test, split_idx, alpha=0.05, window=None,
             train_slice = train_slice.tail(window)  
 
         if vol == 'GARCH':
-            res, arch_alpha, beta, _ = fit_garch(train_slice*100, p=p, q=q)
+            res, arch_alpha, beta, _ = fit_garch(train_slice*100, p=p, q=q, dist = dist)
         else:
-            res, arch_alpha, beta, _ = fit_egarch(train_slice*100, p=p, o=o, q=q, start_params=start_params)
+            res, arch_alpha, beta, _ = fit_egarch(train_slice*100, p=p, o=o, q=q, dist=dist,start_params=start_params)
         if getattr(res, "converged", getattr(res, "success", True)):
             start_params = res.params.values
         
@@ -472,14 +470,12 @@ def rolling_garch_var(train_test, split_idx, alpha=0.05, window=None,
 
     return (pd.Series(sig2_list, index=test_index, name=f'{vol}_σ2'),
             pd.Series(var_list,  index=test_index, name=f'{vol}_VaR'))
-
+    
 #%%
-
 def rolling_garch_var_1(train_test, split_idx, alpha=0.05, window=None,
-                      p=1, q=1, o=1, vol='GARCH', start_params=None):
+                      p=1, q=1, o=1, vol='GARCH',dist = 'ged', start_params=None):
     
-    start_params = np.array([0.0, 0.0, 0.017,0.017,0.017, 0.0, 0.18, 0.18, 0.18,0.18,0.18, 8.0])
-    start_params_1 = np.array([0.0, 0.0, 0.01, 0.01, 0.01, 0.01, 0.01, 0.0, 0.30, 0.30, 0.30, 8.0])
+    start_params = start_params
     test_index  = train_test.loc[split_idx:].index[1:]
     sig2_list, var_list = [], []
 
@@ -489,9 +485,9 @@ def rolling_garch_var_1(train_test, split_idx, alpha=0.05, window=None,
             train_slice = train_slice.tail(window)  
 
         if vol == 'GARCH':
-            res, arch_alpha, beta, _ = fit_garch(train_slice*100, p=p, q=q)
+            res, arch_alpha, beta, _ = fit_garch(train_slice*100, p=p, q=q, dist = dist)
         else:
-            res, arch_alpha, beta, _ = fit_egarch(train_slice*100, p=p, o=o, q=q, start_params=start_params)
+            res, arch_alpha, beta, _ = fit_egarch(train_slice*100, p=p, o=o, q=q, dist= dist, start_params=start_params)
         if getattr(res, "converged", getattr(res, "success", True)):
             start_params = res.params.values
         
@@ -502,20 +498,18 @@ def rolling_garch_var_1(train_test, split_idx, alpha=0.05, window=None,
 
     return (pd.Series(sig2_list, index=test_index, name=f'{vol}_σ2'),
             pd.Series(var_list,  index=test_index, name=f'{vol}_VaR'))
-
 #%%
 def violation_ratio(returns, var):
     breaches = returns < -var
     return breaches.sum() / len(breaches)
 #%%
-
-def main(train, test, alpha=0.05, window= 300, p=1, o=1, q=1):
+# MAIN - BASE GARCH VARIANTS
+def main(train, test, alpha=0.05, window= None, p=1, o=1, q=1, dist='skewt', prev_params= None):
     train = train.copy()
-    prev_params = np.array([0.0, 0.0, 0.05, 0.0, 0.90, 8.0])  # [μ, ω, α1, γ1, β1 ν]
 
     # --- in-sample fits ----------------------------------------------------
-    res_g ,alpha_gar, beta_gar, std_resid_gar= fit_garch(train['portfolio'] * 100, p=p, q=q)
-    res_e , alpha_egar, beta_egar, std_resid_egar= fit_egarch(train['portfolio']* 100, p=p, o=o, q=q, start_params=prev_params)
+    res_g ,alpha_gar, beta_gar, std_resid_gar= fit_garch(train['portfolio'] * 100, p=p, q=q, dist=dist)
+    res_e , alpha_egar, beta_egar, std_resid_egar= fit_egarch(train['portfolio']* 100, p=p, o=o, q=q, dist=dist, start_params=prev_params)
     train['ann_sigma_garch']  = res_g.ann_cond_std
     train['ann_sigma_egarch'] = res_e.ann_cond_std
 
@@ -529,9 +523,9 @@ def main(train, test, alpha=0.05, window= 300, p=1, o=1, q=1):
     split_idx = train.index[-1]       # the cut-off between in-sample and out-of-sample
 
     _, VaR_g = rolling_garch_var(full_ret, split_idx, alpha=alpha,
-                                          window=window, vol='GARCH', p=p, q=q)
+                                          window=window, vol='GARCH', p=p, q=q, dist=dist)
     _, VaR_e = rolling_garch_var(full_ret, split_idx, alpha=alpha,
-                                          window=window, vol='EGARCH', p=p, o=o, q=q, start_params=prev_params)
+                                          window=window, vol='EGARCH', p=p, o=o, q=q, dist=dist, start_params=prev_params)
      # --- out  of sample breach rates ------------------------------------------------------
     vr_g = violation_ratio(test['portfolio'], VaR_g.loc[test.index])
     vr_e = violation_ratio(test['portfolio'], VaR_e.loc[test.index])
@@ -551,25 +545,24 @@ def main(train, test, alpha=0.05, window= 300, p=1, o=1, q=1):
     ax = VaR_g_is.plot(label='GARCH VaR', figsize=(10,4))
     VaR_e_is.plot(ax=ax, label='EGARCH VaR')
     train['portfolio'].plot(ax=ax, alpha=0.4, label='Returns')
-    ax.set_title('In-sample VaR: GARCH vs. EGARCH'); ax.legend()
+    ax.set_title('IS VaR: GARCH vs. EGARCH'); ax.legend()
     plt.show()
     # --- plot - Out of Sample -------------------------------------------
     
     ax = VaR_g.plot(label='GARCH VaR', figsize=(10,4))
     VaR_e.plot(ax=ax, label='EGARCH VaR')
     test['portfolio'].plot(ax=ax, alpha=0.4, label='Returns')
-    ax.set_title(': GARCH vs. EGARCH'); ax.legend()
+    ax.set_title('OOS VaR : GARCH vs. EGARCH'); ax.legend()
     plt.show()
     return res_g, res_e, VaR_g, VaR_e, vr_g, vr_e, std_resid_gar, std_resid_egar
 #%%
+# MAIN_1 - GARCH VARIANTS WITH HIGHER ORDER TERMS.(copy of main)
+def main_1(train, test, alpha=0.05, window= None, p=5, o=1, q=5, dist='skewt', prev_params=None):
 
-def main_1(train, test, alpha=0.05, window= None, p=3, o=1, q=5):
     train = train.copy()
-    prev_params = np.array([0.0, 0.0, 0.017,0.017,0.017, 0.0, 0.18, 0.18, 0.18,0.18,0.18, 8.0])  # [μ, ω, α1, α1, α1, α1, α1, γ1, β1, β1, β1, ν]
-
     # --- in-sample fits ----------------------------------------------------
-    res_g ,alpha_gar, beta_gar, std_resid_gar= fit_garch(train['portfolio'] * 100, p=p, q=q)
-    res_e , alpha_egar, beta_egar, std_resid_egar= fit_egarch(train['portfolio']* 100, p=p, o=o, q=q, start_params=prev_params)
+    res_g ,alpha_gar, beta_gar, std_resid_gar= fit_garch(train['portfolio'] * 100, p=p, q=q, dist=dist)
+    res_e , alpha_egar, beta_egar, std_resid_egar= fit_egarch(train['portfolio']* 100, p=p, o=o, q=q,dist=dist, start_params=prev_params)
     train['ann_sigma_garch']  = res_g.ann_cond_std
     train['ann_sigma_egarch'] = res_e.ann_cond_std
 
@@ -582,16 +575,15 @@ def main_1(train, test, alpha=0.05, window= None, p=3, o=1, q=5):
     split_idx = train.index[-1]       # the cut-off between in-sample and out-of-sample
 
     _, VaR_g = rolling_garch_var_1(full_ret, split_idx, alpha=alpha,
-                                          window=window, vol='GARCH', p=p, q=q)
+                                          window=window, vol='GARCH', p=p, q=q, dist=dist)
     _, VaR_e = rolling_garch_var_1(full_ret, split_idx, alpha=alpha,
-                                          window=window, vol='EGARCH', p=p, o=o, q=q, start_params=prev_params)
+                                          window=window, vol='EGARCH', p=p, o=o, q=q, dist=dist, start_params=prev_params)
      # --- out  of sample breach rates ------------------------------------------------------
     vr_g = violation_ratio(test['portfolio'], VaR_g.loc[test.index])
     vr_e = violation_ratio(test['portfolio'], VaR_e.loc[test.index])
     print(f"GARCH breach rate OoS: {vr_g*100:.2f}%")
     print(f"EGARCH breach rate OoS: {vr_e*100:.2f}%")
     
-    print(VaR_g.tail(10))
     VaR_g_is = -norm.ppf(alpha) * res_g.conditional_volatility /100
     VaR_e_is = -norm.ppf(alpha) * res_e.conditional_volatility /100
      # --- in sample breach rates ------------------------------------------------------
@@ -604,27 +596,34 @@ def main_1(train, test, alpha=0.05, window= None, p=3, o=1, q=5):
     ax = VaR_g_is.plot(label='GARCH VaR', figsize=(10,4))
     VaR_e_is.plot(ax=ax, label='EGARCH VaR')
     train['portfolio'].plot(ax=ax, alpha=0.4, label='Returns')
-    ax.set_title('In-sample VaR: GARCH vs. EGARCH'); ax.legend()
+    ax.set_title('IS VaR: GARCH vs. EGARCH'); ax.legend()
     plt.show()
     # --- plot - Out of Sample -------------------------------------------
     
     ax = VaR_g.plot(label='GARCH VaR', figsize=(10,4))
     VaR_e.plot(ax=ax, label='EGARCH VaR')
     test['portfolio'].plot(ax=ax, alpha=0.4, label='Returns')
-    ax.set_title(': GARCH vs. EGARCH'); ax.legend()
+    ax.set_title('OOS VaR : GARCH vs. EGARCH'); ax.legend()
     plt.show()
     return res_g, res_e, VaR_g, VaR_e, vr_g, vr_e, std_resid_gar, std_resid_egar
 
-
 #%%
+prev_params = np.array([0.0, 0.0, 0.05, 0.0, 0.90, 8.0])  # [μ, ω, α1, γ1, β1, ν]
 if __name__ == "__main__":
-    # pick one version to run
-    res_g_0, res_e_0, VaR_g_0, VaR_e_0, vr_g_0, vr_e_0, std_resid_gar_0, std_resid_egar_0  = main(train, test)
-#%%
-if __name__ == "__main__":
-    # pick one version to run
-    res_g_1, res_e_1, VaR_g_1, VaR_e_1, vr_g_1, vr_e_1, std_resid_gar_1, std_resid_egar_1  = main_1(train, test)
 
+    res_g_0, res_e_0, VaR_g_0, VaR_e_0, vr_g_0, vr_e_0, std_resid_gar_0, std_resid_egar_0  = main(train, test, alpha=0.05, window= None, p=1, o=1, q=1, dist='ged', prev_params=prev_params)
+#%%
+# Define initial parameters for model_1.
+#%%
+# Define initial parameters for model_1.
+prev_params_121 = np.array([0.0, 0.0, 0.05, 0.0, 0.0, 0.9, 6.0])  # [μ, ω, α1, α2, α3, α4, α4, γ1, β1, β2, β3, β4, β5, ν]
+prev_params_515 = np.array([0.0, 0.0, 0.01, 0.01, 0.01, 0.01, 0.01, 0.0, 0.18, 0.18, 0.18, 0.18, 0.18, 6.0])  # [μ, ω, α1, α2, α3, α4, α4, γ1, β1, β2, β3, β4, β5, ν]
+prev_params_513 = np.array([0.0, 0.0, 0.01, 0.01, 0.01, 0.01, 0.01, 0.0, 0.03, 0.03, 0.03, 8.0])  # [μ, ω, α1, α2, α3, α4, α5, γ1, β1, β2, β3, ν]
+prev_params_513_skew = np.array([0.0, 0.0, 0.01, 0.01, 0.01, 0.01, 0.01, 0.0, 0.03, 0.03, 0.03, 10.0, 0.0])  # [μ, ω, α1, α2, α3, α4, α5, γ1, β1, β2, β3, ν]
+prev_params_315 = np.array([0.0, 0.0, 0.017,0.017,0.017, 0.0, 0.18, 0.18, 0.18, 0.18, 0.18, 8.0])  # [μ, ω, α1, α2, α3, γ1, β1, β2, β3, β4, β5, ν]
+prev_params_523 = np.array([0.0, 0.0, 0.01, 0.01, 0.01, 0.01, 0.01, 0.0, 0.0, 0.03, 0.03, 0.03, 8.0])  # [μ, ω, α1, α2, α3, α4, α5, γ1, β1, β2, β3, ν]
+if __name__ == "__main__":
+    res_g_1, res_e_1, VaR_g_1, VaR_e_1, vr_g_1, vr_e_1, std_resid_gar_1, std_resid_egar_1  = main_1(train, test, alpha=0.05, window= None, p=5, o=1, q=3, dist = 'ged', prev_params=prev_params_513)
 #%%
 from statsmodels.stats.diagnostic import acorr_ljungbox
 for lag in (10, 15, 20): print(acorr_ljungbox(std_resid_egar_0, lags=[lag], return_df=True))
@@ -642,7 +641,7 @@ plt.show()
 
 #%%
 from scipy.stats import jarque_bera
-stat, p = jarque_bera(std_resid_egar)
+stat, p = jarque_bera(std_resid_egar_0)
 print(f"JB stat={stat:.2f}, p-value={p:.3f}")
 
 #%%
@@ -650,24 +649,46 @@ from statsmodels.stats.diagnostic import acorr_ljungbox
 from statsmodels.stats.diagnostic import het_arch
 
 # Diagnostics
-lb_test = acorr_ljungbox(std_resid_gar.dropna(), lags=[10], return_df=True)
-lb_test_squared = acorr_ljungbox(std_resid_gar.dropna()**2, lags=[10], return_df=True)
+lb_test = acorr_ljungbox(std_resid_gar_0.dropna(), lags=[10], return_df=True)
+lb_test_squared = acorr_ljungbox(std_resid_gar_0.dropna()**2, lags=[10], return_df=True)
 
-lm_arch = het_arch(std_resid_gar.dropna())
+lm_arch = het_arch(std_resid_gar_0.dropna())
 
 print("\nLjung-Box Test (Residuals):\n", lb_test)
 print("\nLjung-Box Test (Squared Residuals):\n", lb_test_squared)
 print("\nARCH LM Test:\n", lm_arch)
 #%%
-display(Markdown("""
+res_g_0.summary()
+#%%
+from scipy.stats import chisquare
+# PIT under fitted skewt
+nu = res_e_0.params['nu']
+u = stats.t.cdf(std_resid_egar_0.dropna(), df=nu)
 
-"""))
+# test uniformity over 10 bins
+hist, bins = np.histogram(u, bins=10, range=(0,1))
+expected = np.full(10, len(u) / 10)
+chi_stat, p_val = chisquare(hist, expected)
+
+print(f"Chi-squared stat: {chi_stat:.2f}, p-value: {p_val:.4f}")
+
 
 #%%
 
 
+# PIT uniformity χ² tests for standardized residuals of two GARCH & two EGARCH fits
+from scipy.stats import chisquare, t
 
-
+for name, (std_resid, res) in [
+    ("GARCH0",  (std_resid_gar_0,  res_g_0)),
+    ("EGARCH0", (std_resid_egar_0, res_e_0)),
+    ("GARCH1",  (std_resid_gar_1,  res_g_1)),
+    ("EGARCH1", (std_resid_egar_1, res_e_1)),
+]:
+    u    = t.cdf(std_resid.dropna(), df=res.params["nu"])
+    hist = np.histogram(u, bins=10, range=(0,1))[0]
+    chi, p = chisquare(hist, np.full(10, len(u)/10))
+    print(f"{name}: χ²={chi:.2f}, p={p:.4f}")
 
 
 
