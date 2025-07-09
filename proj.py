@@ -100,7 +100,7 @@ test.to_pickle(file_path)
 
 """
 #%%
-file_path = "/Users/shah/TSA_project/prices.pkl"
+file_path = "prices.pkl"
 prices=pd.read_pickle(file_path)
 #%%
 def adf_test0(series, max_lag=3):
@@ -253,25 +253,25 @@ plt.show()
 
 #%% 
 # Autocorrelation function for squared log returns.
-tun_tun_tun_sahur = pacf
-acf_values = tun_tun_tun_sahur((train['portfolio']**2).dropna(), nlags=36)
+version = pacf
+acf_values = version((train['portfolio']**2).dropna(), nlags=36)
 plt.figure(figsize=(12, 6))
 plt.stem(range(len(acf_values)), acf_values)
 plt.axhline(y=0, linestyle='-', color='black')
 plt.axhline(y=-1.96/np.sqrt(len(train['portfolio'])), linestyle='--', color='gray')
 plt.axhline(y=1.96/np.sqrt(len(train['portfolio'])), linestyle='--', color='gray')
-plt.title(f'{tun_tun_tun_sahur.__name__} of Log Returns of ')
+plt.title(f'{version.__name__} of Log Returns of ')
 plt.show()
 #%% 
 # Autocorrelation function for squared log returns.
-tun_tun_tun_sahur = acf
-acf_values = tun_tun_tun_sahur((train['portfolio']**2).dropna(), nlags=36)
+version = acf
+acf_values = version((train['portfolio']**2).dropna(), nlags=36)
 plt.figure(figsize=(12, 6))
 plt.stem(range(len(acf_values)), acf_values)
 plt.axhline(y=0, linestyle='-', color='black')
 plt.axhline(y=-1.96/np.sqrt(len(train['portfolio'])), linestyle='--', color='gray')
 plt.axhline(y=1.96/np.sqrt(len(train['portfolio'])), linestyle='--', color='gray')
-plt.title(f'{tun_tun_tun_sahur.__name__} of Log Returns of ')
+plt.title(f'{version.__name__} of Log Returns of ')
 plt.show()
 #%%
 display(Markdown("""
@@ -425,64 +425,79 @@ def fit_garch(train_returns_pct, p =1, q=1):
     # --- annualized conditional σ (pct units) ---
     ann_sigma_pct = res.conditional_volatility * np.sqrt(252)
     res.ann_cond_std = ann_sigma_pct / 100          # store as decimals for convenience
-    return res, alpha, beta
+    std_resid = res.resid / res.conditional_volatility
+    return res, alpha, beta, std_resid
 
 #%%
 # --- 1. fit EGARCH once to get in-sample annualized σ̂ ----------------------
-def fit_egarch(train_returns_pct, p=1, o=1, q=1):
+def fit_egarch(train_returns_pct, p=1, o=1, q=1, start_params=None):
 
     model = arch_model(train_returns_pct, vol='EGARCH',
                        p=p, o=o, q=q, dist='t')
-    res   = model.fit(disp='off')
+    res   = model.fit(disp='off', starting_values=start_params)
     alpha = res.params["alpha[1]"]
     beta  = res.params["beta[1]"]
     ann_sigma_pct = res.conditional_volatility * np.sqrt(252)
     res.ann_cond_std = ann_sigma_pct / 100      # store as decimals
-    return res, alpha, beta
-
-
-
-#%%[markdown]
-# For EGARCH the persistence metric is just β
-#%%
-display(Markdown("""
-### Mapping for AIC/BIC Calculation from Custom Model
-
-- `-result.fun` → Returns the **log-likelihood** (since we minimized the negative log-likelihood).  
-- `len(result.x)` → Total **number of estimated parameters** (ω, α₁...αₚ, β₁...β_q).  
-- `T` → Number of **observations** used in the model fitting.
-"""))
+    std_resid = res.resid / res.conditional_volatility
+    
+    return res, alpha, beta, std_resid
 
 #%%
-from scipy.stats import norm
 
-def rolling_garch_var(train_test, alpha=0.05, window=None, vol='GARCH'):
-    """
-    Rolling one-day VaR and σ² with either GARCH or EGARCH.
-    Set vol='GARCH' (default) or vol='EGARCH'.
-    """
-    test_index = train_test.index[train_test.index > train_end]
+def rolling_garch_var(train_test, split_idx, alpha=0.05, window=None,
+                      p=1, q=1, o=1, vol='GARCH', start_params=None):
+    
+    start_params = np.array([0.0, 0.0, 0.05, 0.0, 0.90, 8.0])
+    start_params_1 = np.array([0.0, 0.0, 0.05, 0.0, 0.90, 8.0])
+    test_index  = train_test.loc[split_idx:].index[1:]
     sig2_list, var_list = [], []
 
     for t in test_index:
-        # training slice expanding
+        train_slice = train_test.loc[:t - pd.Timedelta(days=1)]
         if window:
-            train_slice = train_test.loc[:t - pd.Timedelta(days=1)].tail(window)
-        else:
-            train_slice = train_test.loc[:t - pd.Timedelta(days=1)]
-            
+            train_slice = train_slice.tail(window)  
+
         if vol == 'GARCH':
-            res, alpha, beta = fit_garch(train_slice * 100)
+            res, arch_alpha, beta, _ = fit_garch(train_slice*100, p=p, q=q)
         else:
-            res, alpha, beta = fit_egarch(train_slice * 100)
-
-        # last conditional volatility as 1-day ahead forecast
-        sigma = res.conditional_volatility.iloc[-1] / 100
-
+            res, arch_alpha, beta, _ = fit_egarch(train_slice*100, p=p, o=o, q=q, start_params=start_params)
+        if getattr(res, "converged", getattr(res, "success", True)):
+            start_params = res.params.values
+        
+        sigma  = np.sqrt(res.forecast(horizon=1).variance.values[-1, 0]) / 100
         VaR_t = -norm.ppf(alpha) * sigma
-        sig2_pct = (sigma * 100)**2  # convert back to percent squared
+        sig2_list.append(sigma**2)             # store decimal variance directly
+        var_list.append(VaR_t)
 
-        sig2_list.append(sig2_pct / 1e4)   # store as decimal variance
+    return (pd.Series(sig2_list, index=test_index, name=f'{vol}_σ2'),
+            pd.Series(var_list,  index=test_index, name=f'{vol}_VaR'))
+
+#%%
+
+def rolling_garch_var_1(train_test, split_idx, alpha=0.05, window=None,
+                      p=1, q=1, o=1, vol='GARCH', start_params=None):
+    
+    start_params = np.array([0.0, 0.0, 0.017,0.017,0.017, 0.0, 0.18, 0.18, 0.18,0.18,0.18, 8.0])
+    start_params_1 = np.array([0.0, 0.0, 0.01, 0.01, 0.01, 0.01, 0.01, 0.0, 0.30, 0.30, 0.30, 8.0])
+    test_index  = train_test.loc[split_idx:].index[1:]
+    sig2_list, var_list = [], []
+
+    for t in test_index:
+        train_slice = train_test.loc[:t - pd.Timedelta(days=1)]
+        if window:
+            train_slice = train_slice.tail(window)  
+
+        if vol == 'GARCH':
+            res, arch_alpha, beta, _ = fit_garch(train_slice*100, p=p, q=q)
+        else:
+            res, arch_alpha, beta, _ = fit_egarch(train_slice*100, p=p, o=o, q=q, start_params=start_params)
+        if getattr(res, "converged", getattr(res, "success", True)):
+            start_params = res.params.values
+        
+        sigma  = np.sqrt(res.forecast(horizon=1).variance.values[-1, 0]) / 100
+        VaR_t = -norm.ppf(alpha) * sigma
+        sig2_list.append(sigma**2)             # store decimal variance directly
         var_list.append(VaR_t)
 
     return (pd.Series(sig2_list, index=test_index, name=f'{vol}_σ2'),
@@ -493,36 +508,39 @@ def violation_ratio(returns, var):
     breaches = returns < -var
     return breaches.sum() / len(breaches)
 #%%
-def main(train, test, alpha=0.05, window=None):
+
+def main(train, test, alpha=0.05, window= 300, p=1, o=1, q=1):
     train = train.copy()
+    prev_params = np.array([0.0, 0.0, 0.05, 0.0, 0.90, 8.0])  # [μ, ω, α1, γ1, β1 ν]
+
     # --- in-sample fits ----------------------------------------------------
-    res_g ,alpha_gar, beta_gar= fit_garch(train['portfolio'] * 100, p=1, q=1)
-    res_e , alpha_egar, beta_egar= fit_egarch(train['portfolio'] * 100, p=1, o=1, q=1)
+    res_g ,alpha_gar, beta_gar, std_resid_gar= fit_garch(train['portfolio'] * 100, p=p, q=q)
+    res_e , alpha_egar, beta_egar, std_resid_egar= fit_egarch(train['portfolio']* 100, p=p, o=o, q=q, start_params=prev_params)
     train['ann_sigma_garch']  = res_g.ann_cond_std
     train['ann_sigma_egarch'] = res_e.ann_cond_std
 
-    persistence_gar = alpha_gar + beta_gar
-    print('alpha+beta for GARCH:', persistence_gar)
+    print('alpha+beta for GARCH:', res_g.params.filter(like='alpha').sum() + res_g.params.filter(like='beta').sum())
 
-    persistence_egar = beta_egar
-    print('alpha+beta for EGARCH:', persistence_egar)
+    print('beta sum for EGARCH:', res_e.params.filter(like='beta').sum())
+    
     
     # --- rolling out-of-sample -------------------------------------------
     full_ret  = pd.concat([train['portfolio'], test['portfolio']])
-    global train_end; train_end = train.index[-1]
+    split_idx = train.index[-1]       # the cut-off between in-sample and out-of-sample
 
-    _, VaR_g = rolling_garch_var(full_ret, alpha=alpha,
-                                          window=window, vol='GARCH')
-    _, VaR_e = rolling_garch_var(full_ret, alpha=alpha,
-                                          window=window, vol='EGARCH')
+    _, VaR_g = rolling_garch_var(full_ret, split_idx, alpha=alpha,
+                                          window=window, vol='GARCH', p=p, q=q)
+    _, VaR_e = rolling_garch_var(full_ret, split_idx, alpha=alpha,
+                                          window=window, vol='EGARCH', p=p, o=o, q=q, start_params=prev_params)
      # --- out  of sample breach rates ------------------------------------------------------
     vr_g = violation_ratio(test['portfolio'], VaR_g.loc[test.index])
     vr_e = violation_ratio(test['portfolio'], VaR_e.loc[test.index])
     print(f"GARCH breach rate OoS: {vr_g*100:.2f}%")
     print(f"EGARCH breach rate OoS: {vr_e*100:.2f}%")
     
-    VaR_g_is = -norm.ppf(alpha) * res_g.conditional_volatility / 100
-    VaR_e_is = -norm.ppf(alpha) * res_e.conditional_volatility / 100
+    print(VaR_g.tail(10))
+    VaR_g_is = -norm.ppf(alpha) * res_g.conditional_volatility /100
+    VaR_e_is = -norm.ppf(alpha) * res_e.conditional_volatility /100
      # --- in sample breach rates ------------------------------------------------------
     vr_g = violation_ratio(train['portfolio'], VaR_g_is)
     vr_e = violation_ratio(train['portfolio'], VaR_e_is)
@@ -540,56 +558,109 @@ def main(train, test, alpha=0.05, window=None):
     ax = VaR_g.plot(label='GARCH VaR', figsize=(10,4))
     VaR_e.plot(ax=ax, label='EGARCH VaR')
     test['portfolio'].plot(ax=ax, alpha=0.4, label='Returns')
-    ax.set_title('Rolling VaR: GARCH vs. EGARCH'); ax.legend()
+    ax.set_title(': GARCH vs. EGARCH'); ax.legend()
     plt.show()
-    return res_g, res_e, VaR_g, VaR_e, vr_g, vr_e
+    return res_g, res_e, VaR_g, VaR_e, vr_g, vr_e, std_resid_gar, std_resid_egar
+#%%
 
-#%%
-display(Markdown("""
-- Fit GARCH(1,1) & EGARCH(1,1,1) on training returns.
-- Save annualised σ̂ to `train` for quick ref.
-- Print persistence α+β for each model.
-- Build `full_ret`, set `train_end` for rolling window.
-- Roll one-day OOS VaR with both models.
-- Compute OOS breach rates against test set.
-- Compute IS VaR directly from in-sample vols.
-- Compute IS breach rates against training set.
-- Plot IS VaR vs. training returns.
-- Plot OOS VaR vs. test returns.
-"""))
-#%%
-display(Markdown("""
-- **Model fits per variant (GARCH & EGARCH)**: 1 initial in-sample fit + *N_test* rolling re-fits ⇒ **N_test + 1** total.
-- **Parameter estimation count**: identical to fit count; each fit produces a fresh (ω, α, β, γ) set.
-- **Training period forecasting**: every σ²_t uses the single parameter set estimated from the full training block.
-- **Test period forecasting**: on day *t*, parameters are re-estimated from returns up to *t − 1* (expanding or fixed window) and used to forecast σ²_t.
-- **VaR threshold**: one-day, one-sided 95 % level (α = 0.05); VaR_t = –Φ⁻¹(0.95) · σ_t.
-"""))
+def main_1(train, test, alpha=0.05, window= None, p=3, o=1, q=5):
+    train = train.copy()
+    prev_params = np.array([0.0, 0.0, 0.017,0.017,0.017, 0.0, 0.18, 0.18, 0.18,0.18,0.18, 8.0])  # [μ, ω, α1, α1, α1, α1, α1, γ1, β1, β1, β1, ν]
+
+    # --- in-sample fits ----------------------------------------------------
+    res_g ,alpha_gar, beta_gar, std_resid_gar= fit_garch(train['portfolio'] * 100, p=p, q=q)
+    res_e , alpha_egar, beta_egar, std_resid_egar= fit_egarch(train['portfolio']* 100, p=p, o=o, q=q, start_params=prev_params)
+    train['ann_sigma_garch']  = res_g.ann_cond_std
+    train['ann_sigma_egarch'] = res_e.ann_cond_std
+
+
+    print('alpha+beta for GARCH:', res_g.params.filter(like='alpha').sum() + res_g.params.filter(like='beta').sum())
+
+    print('beta sum for EGARCH:', res_e.params.filter(like='beta').sum())    
+    # --- rolling out-of-sample -------------------------------------------
+    full_ret  = pd.concat([train['portfolio'], test['portfolio']])
+    split_idx = train.index[-1]       # the cut-off between in-sample and out-of-sample
+
+    _, VaR_g = rolling_garch_var_1(full_ret, split_idx, alpha=alpha,
+                                          window=window, vol='GARCH', p=p, q=q)
+    _, VaR_e = rolling_garch_var_1(full_ret, split_idx, alpha=alpha,
+                                          window=window, vol='EGARCH', p=p, o=o, q=q, start_params=prev_params)
+     # --- out  of sample breach rates ------------------------------------------------------
+    vr_g = violation_ratio(test['portfolio'], VaR_g.loc[test.index])
+    vr_e = violation_ratio(test['portfolio'], VaR_e.loc[test.index])
+    print(f"GARCH breach rate OoS: {vr_g*100:.2f}%")
+    print(f"EGARCH breach rate OoS: {vr_e*100:.2f}%")
+    
+    print(VaR_g.tail(10))
+    VaR_g_is = -norm.ppf(alpha) * res_g.conditional_volatility /100
+    VaR_e_is = -norm.ppf(alpha) * res_e.conditional_volatility /100
+     # --- in sample breach rates ------------------------------------------------------
+    vr_g = violation_ratio(train['portfolio'], VaR_g_is)
+    vr_e = violation_ratio(train['portfolio'], VaR_e_is)
+    print(f"GARCH breach rate IS: {vr_g*100:.2f}%")
+    print(f"EGARCH breach rate IS: {vr_e*100:.2f}%")
+    
+    # --- plot - In sample -------------------------------------------------------------
+    ax = VaR_g_is.plot(label='GARCH VaR', figsize=(10,4))
+    VaR_e_is.plot(ax=ax, label='EGARCH VaR')
+    train['portfolio'].plot(ax=ax, alpha=0.4, label='Returns')
+    ax.set_title('In-sample VaR: GARCH vs. EGARCH'); ax.legend()
+    plt.show()
+    # --- plot - Out of Sample -------------------------------------------
+    
+    ax = VaR_g.plot(label='GARCH VaR', figsize=(10,4))
+    VaR_e.plot(ax=ax, label='EGARCH VaR')
+    test['portfolio'].plot(ax=ax, alpha=0.4, label='Returns')
+    ax.set_title(': GARCH vs. EGARCH'); ax.legend()
+    plt.show()
+    return res_g, res_e, VaR_g, VaR_e, vr_g, vr_e, std_resid_gar, std_resid_egar
+
 
 #%%
 if __name__ == "__main__":
     # pick one version to run
-    res_g, res_e, VaR_g, VaR_e, vr_g, vr_e = main(train, test)
-
+    res_g_0, res_e_0, VaR_g_0, VaR_e_0, vr_g_0, vr_e_0, std_resid_gar_0, std_resid_egar_0  = main(train, test)
+#%%
+if __name__ == "__main__":
+    # pick one version to run
+    res_g_1, res_e_1, VaR_g_1, VaR_e_1, vr_g_1, vr_e_1, std_resid_gar_1, std_resid_egar_1  = main_1(train, test)
 
 #%%
+from statsmodels.stats.diagnostic import acorr_ljungbox
+for lag in (10, 15, 20): print(acorr_ljungbox(std_resid_egar_0, lags=[lag], return_df=True))
+
+#%%
+# Empirical Density of Standardized Residuals
+plt.figure(figsize=(10, 5))
+sns.histplot(std_resid_gar, kde=True, stat="density", label='Empirical Density')
+# Overlay standard normal for comparison
+x_norm = np.linspace(std_resid_gar.min(), std_resid_gar.max(), 100)
+plt.plot(x_norm, stats.norm.pdf(x_norm, 0, 1), label='Standard Normal PDF', color='red')
+plt.title('Empirical Density of Standardized Residuals')
+plt.legend()
+plt.show()
+
+#%%
+from scipy.stats import jarque_bera
+stat, p = jarque_bera(std_resid_egar)
+print(f"JB stat={stat:.2f}, p-value={p:.3f}")
+
+#%%
+from statsmodels.stats.diagnostic import acorr_ljungbox
+from statsmodels.stats.diagnostic import het_arch
+
+# Diagnostics
+lb_test = acorr_ljungbox(std_resid_gar.dropna(), lags=[10], return_df=True)
+lb_test_squared = acorr_ljungbox(std_resid_gar.dropna()**2, lags=[10], return_df=True)
+
+lm_arch = het_arch(std_resid_gar.dropna())
+
+print("\nLjung-Box Test (Residuals):\n", lb_test)
+print("\nLjung-Box Test (Squared Residuals):\n", lb_test_squared)
+print("\nARCH LM Test:\n", lm_arch)
+#%%
 display(Markdown("""
-# Model Workflow Cheat-Sheet (information on what the model is performing and where in the code)
 
-- **Initial in-sample fit per model**  
-  `res_g, _, _ = fit_garch(train['portfolio']*100);  res_e, _, _ = fit_egarch(train['portfolio']*100)`
-
-- **Daily re-fit in test window (expanding/fixed)**  
-  `res, _, _ = fit_garch(train_slice*100)`  # inside `rolling_garch_var` loop
-
-- **Training σ² uses single parameter set from full training block**  
-  `sigma_g = res_g.conditional_volatility / 100`
-
-- **Test σ² uses parameters re-estimated up to t-1**  
-  `sigma = res.conditional_volatility.iloc[-1] / 100`
-
-- **VaR threshold: one-day 95 % (α = 0.05)**  
-  `VaR_t = -norm.ppf(alpha) * sigma`
 """))
 
 #%%
@@ -662,7 +733,6 @@ print("EGARCH")
 print("AIC:", res_e.aic)
 print("BIC:", res_e.bic)
 #%%
-import numpy as np
 
 def calculate_aic_bic(log_lik, num_params, num_obs):
     aic = -2 * log_lik + 2 * num_params
